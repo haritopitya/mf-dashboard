@@ -4,7 +4,7 @@
 
 セットアップは次の順番で進める。
 
-1. Money Forward MEと1Passwordを準備する
+1. Money Forward MEを準備する
 2. Cloudflare Zero TrustとGoogle OAuthを準備する
 3. アプリとインフラの設定ファイルを作成する
 4. Terraformを適用する
@@ -13,7 +13,6 @@
 ## 必須要件
 
 - [Money Forward ME](https://moneyforward.com/)
-- [1Password](https://1password.com/jp)（Service Account）
 - [Cloudflare](https://www.cloudflare.com/ja-jp/)アカウント（Zero Trustを有効化済み）
 - 公開先FQDNのゾーンをCloudflareで管理していること
 - ローカルPCが常時起動できる環境
@@ -30,12 +29,11 @@ git clone https://github.com/hiroppy/mf-dashboard.git
 cd mf-dashboard
 ```
 
-## 1. Money Forward MEと1Passwordの準備
+## 1. Money Forward MEの準備
 
+- Money Forward IDでメールアドレスとパスワードによるログインを有効にする。crawlerはメールアドレスとパスワードのフォーム入力でログインするため、Googleログインのみのアカウントでは動作しない。
 - Money Forward MEでワンタイムパスワードを設定する（[設定方法](https://support.me.moneyforward.com/hc/ja/articles/7359917171481-%E4%BA%8C%E6%AE%B5%E9%9A%8E%E8%AA%8D%E8%A8%BC%E3%81%AE%E8%A8%AD%E5%AE%9A%E6%96%B9%E6%B3%95)）
-- 1PasswordでService Accountを発行する（[設定方法](https://developer.1password.com/docs/service-accounts/get-started#create-a-service-account)）
-  - Private、Personal、Familyなど、最初から用意されている保管庫へService Accountはアクセスできない。Money Forward MEのアカウントを自分で作成した保管庫へ移し、Service Accountへアクセス権を付与する。
-  - Money Forward MEのログイン項目に、標準の`username`と`password`フィールド、およびワンタイムパスワードのフィールドを用意する。crawlerはこれらのフィールドを1Password SDKから読み取る。
+  - 設定時に表示されるセットアップキー（Base32のシークレット）を控え、`.env`の`MF_TOTP_SECRET`へ設定する。crawlerはこのキーからワンタイムパスワードを生成する。
 
 ## 2. Cloudflare Zero Trustの準備
 
@@ -71,7 +69,7 @@ Terraform用のAPI Tokenを発行する。必要な最小権限は次のとお�
 | Zone     | `Zone:Read`                                                  |
 | Zone     | `DNS:Edit`（対象ゾーンを含む）                               |
 
-発行したトークンをパスワードマネージャーなどへ保管し、手順3.2で作成するGit管理対象外の`terraform/terraform.tfvars`にある`cloudflare_api_token`へ設定する。Terraformは`.env`や1Passwordからインフラ設定を読み取らない。
+発行したトークンをパスワードマネージャーなどへ保管し、手順3.2で作成するGit管理対象外の`terraform/terraform.tfvars`にある`cloudflare_api_token`へ設定する。Terraformは`.env`からインフラ設定を読み取らない。
 
 `terraform.tfvars`とTerraform stateには秘密情報が含まれる。どちらもGitへ追加せず、ローカルディスクの暗号化とファイル権限`600`を維持する。
 
@@ -99,10 +97,9 @@ openssl rand -hex 32
 この時点では、次の値を`.env`へ設定する。
 
 ```dotenv
-OP_SERVICE_ACCOUNT_TOKEN=<1Password Service Accountのトークン>
-OP_VAULT=<保管庫名またはUUID>
-OP_ITEM=<項目名またはUUID>
-OP_TOTP_FIELD=<TOTPフィールド名またはID>
+MF_USERNAME=<Money Forwardのメールアドレス>
+MF_PASSWORD=<Money Forwardのパスワード>
+MF_TOTP_SECRET=<ワンタイムパスワードのセットアップキー>
 REFRESH_TOKEN=<openssl rand -hex 32の出力>
 CLOUDFLARE_ACCESS_TEAM_DOMAIN=<team-name>.cloudflareaccess.com
 DASHBOARD_URL=https://dashboard.example.com
@@ -118,8 +115,8 @@ DASHBOARD_URL=https://dashboard.example.com
 | `CLOUDFLARE_ACCESS_TEAM_DOMAIN`              | 必須 | Terraform適用前      | Access JWTの発行者となる`<team-name>.cloudflareaccess.com`                       |
 | `CLOUDFLARE_ACCESS_AUD`                      | 必須 | Terraform適用後      | Terraformが作成したAccess ApplicationのAUD                                       |
 | `DASHBOARD_URL`                              | 必須 | Terraform適用前      | Open Graph / Twitter metadataと通知に使う公開ダッシュボードURL                   |
-| `OP_SERVICE_ACCOUNT_TOKEN`                   | 必須 | Terraform適用前      | 1Password Service Accountのトークン                                              |
-| `OP_VAULT` / `OP_ITEM` / `OP_TOTP_FIELD`     | 必須 | Terraform適用前      | Money Forward MEの保管先。日本語を含む場合はUUIDを指定                           |
+| `MF_USERNAME` / `MF_PASSWORD`                | 必須 | Terraform適用前      | Money Forwardのログイン用メールアドレスとパスワード                              |
+| `MF_TOTP_SECRET`                             | 必須 | Terraform適用前      | ワンタイムパスワード設定時に表示されるセットアップキー（Base32）                 |
 | `AI_PROVIDER` / `AI_MODEL` / `AI_API_KEY`    | 任意 | 機能を有効にするとき | 財務インサイト、家計AIチャット、LLMカテゴリ推論。利用する機能では3項目すべて必須 |
 | `SLACK_BOT_TOKEN` / `SLACK_CHANNEL_ID`       | 任意 | 通知を有効にするとき | Slack通知                                                                        |
 | `DISCORD_WEBHOOK_URL` / `DISCORD_AVATAR_URL` | 任意 | 通知を有効にするとき | Discord通知                                                                      |
@@ -127,14 +124,6 @@ DASHBOARD_URL=https://dashboard.example.com
 | `AUTH_STATE_PATH`                            | 任意 | ローカル実行時       | ローカル実行時のブラウザーセッション保存先。Docker Composeでは設定しない         |
 
 Linuxでは`id -u`と`id -g`で値を確認し、`1000:1000`と異なる場合は`.env`の`HOST_UID`と`HOST_GID`へ設定する。web、crawler、cloudflaredが同じUID/GIDで動作し、`./data`とowner-read-onlyのTunnel tokenへ必要な範囲だけアクセスする。
-
-#### 1PasswordのIDを確認する
-
-1Password SDKは日本語の保管庫名や項目名を扱えないため、日本語を含む場合はUUIDを使う。
-
-- `OP_VAULT`: サイドバーで保管庫を右クリックし、「UUIDをコピー」を選ぶ
-- `OP_ITEM`: アイテム画面右上のメニューから「UUIDをコピー」を選ぶ
-- `OP_TOTP_FIELD`: 同じメニューの「アイテムのJSONをコピー」を選び、`u`の値が`TOTP_`で始まるフィールドIDを取り出す
 
 ### 3.2 インフラ設定
 
