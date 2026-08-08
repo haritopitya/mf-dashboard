@@ -7,6 +7,12 @@ const config: KnipConfig = {
     "apps/crawler": {
       ignore: ["src/hooks/helpers.ts"],
     },
+    "apps/web": {
+      entry: ["e2e/mock-crawler-server.ts"],
+    },
+    "packages/db": {
+      entry: ["src/migrate.ts"],
+    },
   },
 };
 

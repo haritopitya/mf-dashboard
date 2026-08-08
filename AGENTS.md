@@ -33,6 +33,15 @@ This repository is a monorepo built with pnpm workspaces and Turborepo.
 - Every foreign key must specify `onDelete` (`cascade` or `set null`).
 - When adding or modifying schema, update `docs/architecture/database-schema.md` to match the current structure.
 
+### Cash Flow Transfers
+
+Money Forward may expose the same cash movement both as a transfer and as a normal income or expense on the transfer target account.
+
+- When calculating income, expenses, balances, forecasts, or recurring transactions from raw transactions, use the shared mirror-detection utilities in `packages/db/src/shared/transfer.ts`. Do not implement feature-local transfer deduplication.
+- If a transfer and a normal transaction have the same transfer target account, date, and amount, treat the normal transaction as authoritative and exclude the mirrored transfer-side cash flow.
+- Preserve both raw records in the database. Deduplication belongs in cash-flow interpretation, not crawler persistence.
+- Add tests covering mirrored records and transfer-only records whenever a feature introduces a new cash-flow calculation path.
+
 ### Components
 
 - Every component under `components/` must have a corresponding `*.stories.tsx` file.
@@ -161,8 +170,8 @@ pnpm --filter @mf-dashboard/crawler dev:scrape
 
 Scraping mode is inferred from database existence:
 
-- If `data/moneyforward.db` exists, `month` mode fetches the current month only.
-- If it does not exist, `history` mode fetches the past 13 months.
+- If `data/moneyforward.db` exists, `month` mode re-fetches the current and previous accounting periods so delayed transactions and category updates are incorporated.
+- If it does not exist, `history` mode fetches from January of the previous year through the current accounting period.
 - For testing, set `SCRAPE_MODE=history` or `SCRAPE_MODE=month` to override detection.
 - To remove groups no longer present in Money Forward, run with `CLEANUP_GROUPS=true`. Otherwise, groups are only upserted and never deleted.
 

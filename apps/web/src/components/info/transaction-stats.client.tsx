@@ -1,14 +1,18 @@
 "use client";
 
-import { X } from "lucide-react";
 import { useState } from "react";
 import { getCategoryColor } from "../../lib/colors";
 import { formatCurrency, formatDate } from "../../lib/format";
 import { PieChart } from "../charts/pie-chart";
 import { AmountDisplay } from "../ui/amount-display";
 import { Badge } from "../ui/badge";
-import { Button } from "../ui/button";
-import { Dialog, DialogContent, DialogDescription, DialogTitle } from "../ui/dialog";
+import {
+  Dialog,
+  DialogCloseButton,
+  DialogContent,
+  DialogDescription,
+  DialogTitle,
+} from "../ui/dialog";
 import { Select } from "../ui/select";
 import {
   calculateCompositionPercentage,
@@ -50,17 +54,9 @@ export function TransactionStatsClient({ year, income, expense }: TransactionSta
   );
   const [sortBy, setSortBy] = useState<TransactionSort>("amount");
 
-  const selectedBreakdown = selection
-    ? (selection.type === "income" ? income : expense).find(
-        (breakdown) => breakdown.name === selection.name,
-      )
-    : undefined;
-  const selectedTotal = selection
-    ? (selection.type === "income" ? income : expense).reduce(
-        (sum, breakdown) => sum + breakdown.value,
-        0,
-      )
-    : 0;
+  const selectedData = selection ? (selection.type === "income" ? income : expense) : [];
+  const selectedBreakdown = selectedData.find((breakdown) => breakdown.name === selection?.name);
+  const selectedTotal = selectedData.reduce((sum, breakdown) => sum + breakdown.value, 0);
   const selectedTransactions = selectedBreakdown
     ? sortCategoryTransactions(selectedBreakdown.transactions, sortBy)
     : [];
@@ -121,15 +117,7 @@ export function TransactionStatsClient({ year, income, expense }: TransactionSta
                   value={sortBy}
                   onChange={(value) => setSortBy(value as TransactionSort)}
                 />
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="icon"
-                  aria-label="明細を閉じる"
-                  onClick={() => setSelection(null)}
-                >
-                  <X aria-hidden="true" />
-                </Button>
+                <DialogCloseButton ariaLabel="明細を閉じる" />
               </div>
             </div>
 
