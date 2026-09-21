@@ -1,6 +1,7 @@
 "use client";
 
 import { formatCurrency } from "../../../lib/format";
+import { FormField } from "../../ui/form-field";
 import { MetricLabel } from "../../ui/metric-label";
 import { NumberField } from "../../ui/number-field";
 import { Select } from "../../ui/select";
@@ -29,6 +30,10 @@ export interface SettingsPanelProps {
   onAnnualReturnRateChange: (value: number) => void;
   expenseRatio: number;
   onExpenseRatioChange: (value: number) => void;
+  inflationRate: number;
+  onInflationRateChange: (value: number) => void;
+  volatility: number;
+  onVolatilityChange: (value: number) => void;
   withdrawalMode: WithdrawalMode;
   onWithdrawalModeChange: (value: WithdrawalMode) => void;
   withdrawalRate: number;
@@ -49,7 +54,6 @@ export interface SettingsPanelProps {
   onTaxFreeChange: (value: boolean) => void;
   inflationAdjustedWithdrawal: boolean;
   onInflationAdjustedWithdrawalChange: (value: boolean) => void;
-  inflationRate: number;
   portfolioContext?: PortfolioContext;
 }
 
@@ -72,6 +76,10 @@ export function SettingsPanel({
   onAnnualReturnRateChange,
   expenseRatio,
   onExpenseRatioChange,
+  inflationRate,
+  onInflationRateChange,
+  volatility,
+  onVolatilityChange,
   withdrawalMode,
   onWithdrawalModeChange,
   withdrawalRate,
@@ -92,26 +100,26 @@ export function SettingsPanel({
   onTaxFreeChange,
   inflationAdjustedWithdrawal,
   onInflationAdjustedWithdrawalChange,
-  inflationRate,
   portfolioContext,
 }: SettingsPanelProps) {
   return (
     <div className="rounded-lg border p-4 space-y-4">
-      <div className="sm:max-w-48 space-y-2">
-        <MetricLabel
-          title="現在の年齢"
-          description="設定すると、グラフやサマリーが年齢で表示され、年金の受給設定が有効になります"
-        />
+      <FormField
+        label="現在の年齢"
+        htmlFor="simulator-current-age"
+        className="sm:max-w-48"
+        description="設定すると、グラフやサマリーが年齢で表示され、年金の受給設定が有効になります"
+      >
         <NumberField
+          id="simulator-current-age"
           value={currentAge}
           onValueChange={(v) => onCurrentAgeChange(v ?? undefined)}
           min={0}
           max={100}
           step={1}
           suffix="歳"
-          aria-label="現在の年齢"
         />
-      </div>
+      </FormField>
       <InteractiveTimelineBar
         contributionYears={contributionYears}
         withdrawalStartYear={withdrawalStartYear}
@@ -136,33 +144,36 @@ export function SettingsPanel({
           />
         </div>
       </div>
-      <div className="grid gap-4 sm:grid-cols-2 md:grid-cols-4">
-        <div className="space-y-2">
-          <MetricLabel
-            title="初期投資額"
-            description="一括で投資する金額。0円でも積立のみで運用できます"
-          />
+      <div className="grid gap-4 sm:grid-cols-2 md:grid-cols-3">
+        <FormField
+          label="初期投資額"
+          htmlFor="simulator-initial-amount"
+          description="一括で投資する金額。0円でも積立のみで運用できます"
+        >
           <NumberField
+            id="simulator-initial-amount"
             value={initialAmount}
             onValueChange={(v) => onInitialAmountChange(v ?? 0)}
             min={0}
             step={10000}
             largeStep={100000}
             suffix="円"
-            aria-label="初期投資額"
           />
-        </div>
+        </FormField>
 
-        <div className="space-y-2">
-          <MetricLabel title="月額積立額" description="毎月定額で積み立てる金額" />
+        <FormField
+          label="月額積立額"
+          htmlFor="simulator-monthly-contribution"
+          description="毎月定額で積み立てる金額"
+        >
           <NumberField
+            id="simulator-monthly-contribution"
             value={monthlyContribution}
             onValueChange={(v) => onMonthlyContributionChange(v ?? 0)}
             min={0}
             step={1000}
             largeStep={10000}
             suffix="円"
-            aria-label="月額積立額"
             disabled={contributionYears === 0}
           />
           {portfolioContext?.monthlyContributionSource && (
@@ -170,7 +181,7 @@ export function SettingsPanel({
               {portfolioContext.monthlyContributionSource}
             </p>
           )}
-        </div>
+        </FormField>
 
         <div className="space-y-2">
           <div className="flex items-center justify-between">
@@ -292,6 +303,83 @@ export function SettingsPanel({
               { value: 1, label: "1%" },
               { value: 2, label: "2%" },
               { value: 3, label: "3%" },
+            ]}
+          />
+        </div>
+
+        <div className="space-y-2">
+          <div className="flex items-center justify-between">
+            <MetricLabel
+              title="インフレ率"
+              description="今の100万円が将来いくらの価値になるかに影響します。日本の直近インフレ率は約2〜3%です。名目リターンから差し引いて実質リターンを算出し、モンテカルロ・シミュレーションは購買力ベース（実質値）で表示されます"
+            />
+            <span className="text-sm font-semibold text-primary">{inflationRate}%</span>
+          </div>
+          <Slider
+            value={inflationRate}
+            onValueChange={onInflationRateChange}
+            min={0}
+            max={10}
+            step={0.5}
+            aria-label="インフレ率"
+            ticks={[
+              { value: 0, label: "0%" },
+              { value: 5, label: "5%" },
+              { value: 10, label: "10%" },
+            ]}
+          />
+        </div>
+
+        <div className="space-y-2">
+          <div className="flex items-center justify-between">
+            <MetricLabel
+              title="ボラティリティ"
+              description={
+                <div className="space-y-1.5">
+                  <p>年率の価格変動幅。値が大きいほどリターンのばらつきが大きくなります。</p>
+                  <table className="w-full text-xs">
+                    <thead>
+                      <tr className="border-b">
+                        <th className="pb-1 text-left font-medium">資産クラス</th>
+                        <th className="pb-1 text-right font-medium">目安</th>
+                      </tr>
+                    </thead>
+                    <tbody className="tabular-nums">
+                      <tr>
+                        <td>全世界株式 (MSCI ACWI)</td>
+                        <td className="text-right">14〜17%</td>
+                      </tr>
+                      <tr>
+                        <td>先進国株式 (S&amp;P500等)</td>
+                        <td className="text-right">15〜19%</td>
+                      </tr>
+                      <tr>
+                        <td>バランス型 (株60/債40)</td>
+                        <td className="text-right">8〜11%</td>
+                      </tr>
+                      <tr>
+                        <td>債券中心</td>
+                        <td className="text-right">3〜8%</td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+              }
+            />
+            <span className="text-sm font-semibold text-primary">{volatility}%</span>
+          </div>
+          <Slider
+            value={volatility}
+            onValueChange={onVolatilityChange}
+            min={5}
+            max={30}
+            step={1}
+            aria-label="ボラティリティ"
+            ticks={[
+              { value: 5, label: "5%" },
+              { value: 10, label: "10%" },
+              { value: 20, label: "20%" },
+              { value: 30, label: "30%" },
             ]}
           />
         </div>
@@ -554,21 +642,21 @@ export function SettingsPanel({
             </p>
           )}
         </div>
-        <div className="space-y-2">
-          <MetricLabel
-            title="その他の月収"
-            description="パート収入、家賃収入などの手取り額。切り崩し開始時から常に適用されます"
-          />
+        <FormField
+          label="その他の月収"
+          htmlFor="simulator-monthly-other-income"
+          description="パート収入、家賃収入などの手取り額。切り崩し開始時から常に適用されます"
+        >
           <NumberField
+            id="simulator-monthly-other-income"
             value={monthlyOtherIncome}
             onValueChange={(v) => onMonthlyOtherIncomeChange(v ?? 0)}
             min={0}
             step={10000}
             largeStep={50000}
             suffix="円"
-            aria-label="その他の月収"
           />
-        </div>
+        </FormField>
       </div>
       <div className="flex flex-wrap items-center gap-x-6 gap-y-2">
         <div className="flex items-center gap-3">

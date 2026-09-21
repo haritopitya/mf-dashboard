@@ -26,7 +26,8 @@ export interface BankCashFlowEventInput {
   classification?: RecurringCandidateClassification;
   evidence?: RecurringCandidateEvidence;
   recurringIdentity?: string;
-  amountSource?: "scheduled_withdrawal" | "liability";
+  recurrenceIntervalMonths?: number;
+  amountSource?: "scheduled_withdrawal" | "liability" | "manual";
   isTransfer?: boolean;
   isExcludedFromCalculation?: boolean;
 }
@@ -46,8 +47,9 @@ export interface BankBalanceForecast {
   currentBalance: number;
   forecastBoundaryDate: string;
   monthStartDate: string;
+  forecastEndDate: string;
   openingBalance: number;
-  monthEndBalance: number;
+  forecastEndBalance: number;
   days: BankCashFlowDay[];
 }
 
@@ -81,6 +83,7 @@ export function recurringCandidateToBankCashFlowEvent(
     classification: candidate.classification,
     evidence: candidate.evidence,
     recurringIdentity: candidate.recurringIdentity,
+    recurrenceIntervalMonths: candidate.recurrenceIntervalMonths,
     amountSource: candidate.amountSource,
   };
 }
@@ -123,7 +126,7 @@ function calculateAccountForecast(
   indexedEvents: IndexedEvent[],
   currentDate: string,
   monthStartDate: string,
-  monthEndDate: string,
+  forecastEndDate: string,
 ): BankBalanceForecast {
   parseIsoDateKey(account.balanceAsOfDate);
   assertMoney(account.currentBalance, `Account ${String(account.accountId)} currentBalance`);
@@ -131,10 +134,10 @@ function calculateAccountForecast(
     throw new Error(`Account ${String(account.accountId)} balanceAsOfDate cannot be in the future`);
   }
 
-  const monthEvents = indexedEvents
-    .filter(({ event }) => event.date >= monthStartDate && event.date <= monthEndDate)
+  const forecastEvents = indexedEvents
+    .filter(({ event }) => event.date >= monthStartDate && event.date <= forecastEndDate)
     .sort(compareIndexedEvents);
-  const includedEvents = monthEvents.filter(({ event }) => !isExcluded(event));
+  const includedEvents = forecastEvents.filter(({ event }) => !isExcluded(event));
   const actualChangeThroughBalanceDate = includedEvents
     .filter(({ event }) => event.status === "actual" && event.date <= account.balanceAsOfDate)
     .reduce(
@@ -177,8 +180,9 @@ function calculateAccountForecast(
     currentBalance: account.currentBalance,
     forecastBoundaryDate: currentDate,
     monthStartDate,
+    forecastEndDate,
     openingBalance,
-    monthEndBalance: runningBalance,
+    forecastEndBalance: runningBalance,
     days,
   };
 }
@@ -189,8 +193,22 @@ export function calculateMonthlyBankBalanceForecasts(
   currentDate: string,
 ): BankBalanceForecast[] {
   const { year, month } = parseIsoDateKey(currentDate);
-  const monthStartDate = formatIsoDateKey({ year, month, day: 1 });
   const monthEndDate = formatIsoDateKey({ year, month, day: getDaysInMonth(year, month) });
+  return calculateBankBalanceForecasts(accounts, events, currentDate, monthEndDate);
+}
+
+export function calculateBankBalanceForecasts(
+  accounts: BankBalanceAccount[],
+  events: BankCashFlowEventInput[],
+  currentDate: string,
+  forecastEndDate: string,
+): BankBalanceForecast[] {
+  const { year, month } = parseIsoDateKey(currentDate);
+  const monthStartDate = formatIsoDateKey({ year, month, day: 1 });
+  parseIsoDateKey(forecastEndDate);
+  if (forecastEndDate < currentDate) {
+    throw new Error("forecastEndDate cannot be before the forecast boundary");
+  }
   const accountIds = new Set<BankAccountId>();
   for (const account of accounts) {
     if (accountIds.has(account.accountId)) {
@@ -203,7 +221,7 @@ export function calculateMonthlyBankBalanceForecasts(
   const eventsByAccount = new Map<BankAccountId, IndexedEvent[]>();
   events.forEach((event, index) => {
     parseIsoDateKey(event.date);
-    if (event.date < monthStartDate || event.date > monthEndDate) return;
+    if (event.date < monthStartDate || event.date > forecastEndDate) return;
     validateEvent(event, currentDate);
     if (eventIds.has(event.id)) {
       throw new Error(`Duplicate event id: ${event.id}`);
@@ -223,7 +241,7 @@ export function calculateMonthlyBankBalanceForecasts(
       eventsByAccount.get(account.accountId) ?? [],
       currentDate,
       monthStartDate,
-      monthEndDate,
+      forecastEndDate,
     ),
   );
 }

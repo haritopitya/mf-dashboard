@@ -1,5 +1,6 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { BANK_FORECAST_ANCHOR_CHANGE_EVENT } from "./bank-cashflow-forecast-anchor";
 import type { BankCashFlowForecastView } from "./bank-cashflow-forecast-data";
 import { BankCashFlowForecastClient } from "./bank-cashflow-forecast.client";
 
@@ -8,6 +9,7 @@ vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh: routerRefreshMo
 
 afterEach(() => {
   cleanup();
+  window.history.replaceState(null, "", "/");
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
   routerRefreshMock.mockReset();
@@ -19,8 +21,9 @@ const forecast: BankCashFlowForecastView = {
   currentBalance: 100_000,
   forecastBoundaryDate: "2026-08-03",
   monthStartDate: "2026-08-01",
+  forecastEndDate: "2026-08-31",
   openingBalance: 100_000,
-  monthEndBalance: 90_000,
+  forecastEndBalance: 90_000,
   days: [
     {
       date: "2026-08-20",
@@ -49,6 +52,21 @@ const forecast: BankCashFlowForecastView = {
 };
 
 describe("BankCashFlowForecastClient", () => {
+  it("最新残高がなくても銀行口座の手入力予定を管理できる", () => {
+    render(
+      <BankCashFlowForecastClient
+        forecasts={[]}
+        accounts={[{ id: 1, name: "銀行 A" }]}
+        manualEventMinDate="2026-08-10"
+      />,
+    );
+
+    expect(screen.getByText("手入力の入出金予定")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "開く" }));
+    expect(screen.getByRole("button", { name: "予定を追加" })).toBeTruthy();
+    expect(screen.getByText("残高予測に必要な最新の口座残高がありません。")).toBeTruthy();
+  });
+
   it("入出金の変動がない口座も表示する", () => {
     render(
       <BankCashFlowForecastClient
@@ -58,7 +76,7 @@ describe("BankCashFlowForecastClient", () => {
             accountId: 2,
             accountName: "銀行 B",
             days: [],
-            monthEndBalance: forecast.currentBalance,
+            forecastEndBalance: forecast.currentBalance,
           },
           {
             ...forecast,
@@ -66,15 +84,15 @@ describe("BankCashFlowForecastClient", () => {
             accountName: "銀行 C",
             currentBalance: 200_000,
             days: [],
-            monthEndBalance: 200_000,
+            forecastEndBalance: 200_000,
           },
           forecast,
         ]}
       />,
     );
 
-    expect(screen.getByText("銀行 A")).toBeTruthy();
-    expect(screen.getByText("銀行 B")).toBeTruthy();
+    expect(screen.getAllByText("銀行 A").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("銀行 B").length).toBeGreaterThan(0);
     expect(screen.getAllByText("8月3日時点（0件）")).toHaveLength(2);
     expect(
       screen
@@ -88,7 +106,9 @@ describe("BankCashFlowForecastClient", () => {
   it("スマホでも口座名と残高を横並びにする", () => {
     render(<BankCashFlowForecastClient forecasts={[forecast]} />);
 
-    const header = screen.getByText("銀行 A").parentElement?.parentElement;
+    const header = screen
+      .getByRole("button", { name: "銀行 Aの入出金詳細を開く" })
+      .querySelector(".justify-between");
     expect(header?.className).toContain("justify-between");
     expect(header?.className).not.toContain("flex-col");
     const card = screen.getByRole("button", { name: "銀行 Aの入出金詳細を開く" });
@@ -97,6 +117,14 @@ describe("BankCashFlowForecastClient", () => {
     expect(card.className).toContain("hover:border-primary");
     expect(screen.getByText("8月3日時点（1件）")).toBeTruthy();
     expect(screen.queryByText(/入出金の詳細（/)).toBeNull();
+  });
+
+  it("残高と詳細期間を今月末の予測として表示する", () => {
+    render(<BankCashFlowForecastClient forecasts={[forecast]} />);
+
+    expect(screen.getByText("今月末予測残高")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "銀行 Aの入出金詳細を開く" }));
+    expect(screen.getByText("8月1日〜8月31日の実績と予測")).toBeTruthy();
   });
 
   it("実績・予測の意味と今月予測の限界を説明する", () => {
@@ -111,7 +139,10 @@ describe("BankCashFlowForecastClient", () => {
     expect(screen.queryByText("要確認")).toBeNull();
     expect(screen.getByText("実績").className).not.toBe(screen.getByText("確定").className);
     expect(screen.getByText("残高参考")).toBeTruthy();
-    expect(screen.getByText(/今月だけの参考値.*過去月表示と任意月への切替は対象外/)).toBeTruthy();
+    expect(screen.getByText("登録した将来の入出金予定です。")).toBeTruthy();
+    expect(
+      screen.getByText(/今月末までの実績と予測.*将来月の手入力予定は、その月になる/),
+    ).toBeTruthy();
   });
 
   it("詳細ボタンで日付別の入出金と取引後残高をダイアログに表示する", () => {
@@ -127,7 +158,7 @@ describe("BankCashFlowForecastClient", () => {
     expect(dialog.className).toContain("max-w-4xl");
     expect(dialog.className).toContain("overflow-hidden");
     expect(within(dialog).getByText("現在残高")).toBeTruthy();
-    expect(within(dialog).getByText("月末予測残高")).toBeTruthy();
+    expect(within(dialog).getByText("今月末予測残高")).toBeTruthy();
     const dialogHeader = within(dialog).getByRole("heading", {
       name: "銀行 Aの入出金詳細",
     }).parentElement?.parentElement;
@@ -149,6 +180,73 @@ describe("BankCashFlowForecastClient", () => {
     expect(screen.queryByRole("dialog", { name: "銀行 Aの入出金詳細" })).toBeNull();
   });
 
+  it("隔月候補の推定根拠に周期を表示する", () => {
+    const recurringEvent = forecast.days[0]!.events[0]!;
+    render(
+      <BankCashFlowForecastClient
+        forecasts={[
+          {
+            ...forecast,
+            days: [
+              {
+                ...forecast.days[0]!,
+                events: [
+                  {
+                    ...recurringEvent,
+                    classification: "other",
+                    recurrenceIntervalMonths: 2,
+                  },
+                ],
+              },
+            ],
+          },
+        ]}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "銀行 Aの入出金詳細を開く" }));
+    expect(screen.getByText(/隔月の定期的な入出金の過去3回/)).toBeTruthy();
+  });
+
+  it("口座アンカーから対応する予想ダイアログを開く", async () => {
+    window.history.replaceState(null, "", "/cf#bank-forecast-account-1");
+    render(<BankCashFlowForecastClient forecasts={[forecast]} />);
+
+    expect(document.querySelector("#bank-forecast-account-1")).toBeTruthy();
+    await waitFor(() =>
+      expect(screen.getByRole("dialog", { name: "銀行 Aの入出金詳細" })).toBeTruthy(),
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "明細を閉じる" }));
+    expect(window.location.hash).toBe("");
+
+    window.history.replaceState(null, "", "/cf#bank-forecast-account-1");
+    window.dispatchEvent(new HashChangeEvent("hashchange"));
+    await waitFor(() =>
+      expect(screen.getByRole("dialog", { name: "銀行 Aの入出金詳細" })).toBeTruthy(),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "明細を閉じる" }));
+
+    window.history.replaceState(null, "", "/cf#bank-forecast-account-1");
+    window.dispatchEvent(new Event(BANK_FORECAST_ANCHOR_CHANGE_EVENT));
+    await waitFor(() =>
+      expect(screen.getByRole("dialog", { name: "銀行 Aの入出金詳細" })).toBeTruthy(),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "明細を閉じる" }));
+  });
+
+  it("入出金がない口座もアンカーから予想ダイアログを開く", async () => {
+    window.history.replaceState(null, "", "/cf#bank-forecast-account-1");
+    render(
+      <BankCashFlowForecastClient
+        forecasts={[{ ...forecast, days: [], forecastEndBalance: forecast.currentBalance }]}
+      />,
+    );
+
+    const dialog = await screen.findByRole("dialog", { name: "銀行 Aの入出金詳細" });
+    expect(within(dialog).getByText("表示する入出金はありません。")).toBeTruthy();
+  });
+
   it("開いたダイアログで最後の入出金がなくなっても空状態を表示し続ける", () => {
     const { rerender } = render(<BankCashFlowForecastClient forecasts={[forecast]} />);
 
@@ -157,7 +255,7 @@ describe("BankCashFlowForecastClient", () => {
 
     rerender(
       <BankCashFlowForecastClient
-        forecasts={[{ ...forecast, days: [], monthEndBalance: forecast.currentBalance }]}
+        forecasts={[{ ...forecast, days: [], forecastEndBalance: forecast.currentBalance }]}
       />,
     );
 
@@ -252,7 +350,7 @@ describe("BankCashFlowForecastClient", () => {
   });
 
   it("書き込み不可のデモでは除外操作を表示しない", () => {
-    render(<BankCashFlowForecastClient forecasts={[forecast]} allowForecastDismissal={false} />);
+    render(<BankCashFlowForecastClient forecasts={[forecast]} allowForecastChanges={false} />);
 
     fireEvent.click(screen.getByRole("button", { name: "銀行 Aの入出金詳細を開く" }));
 

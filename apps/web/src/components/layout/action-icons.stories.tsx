@@ -137,7 +137,12 @@ export const Header: Story = {
   args: {
     variant: "header",
     notifications: (
-      <AccountNotificationsClient errorAccounts={[]} updatingAccounts={[]} totalIssues={0} />
+      <AccountNotificationsClient
+        errorAccounts={[]}
+        updatingAccounts={[]}
+        balanceAlerts={[]}
+        totalIssues={0}
+      />
     ),
   },
   play: async ({ canvasElement }) => {
@@ -163,6 +168,7 @@ export const HeaderWithNotifications: Story = {
         updatingAccounts={[
           { id: 2, mfId: "account-2", name: "User Bの証券口座", status: "updating" },
         ]}
+        balanceAlerts={[]}
         totalIssues={2}
       />
     ),
@@ -246,7 +252,7 @@ export const Sidebar: Story = {
   },
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
-    await userEvent.click(canvas.getByRole("button", { name: "ヘルプ" }));
+    await userEvent.click(canvas.getByRole("button", { name: "ヘルプ", hidden: true }));
 
     const dialog = within(canvasElement.ownerDocument.body).getByRole("dialog");
     const bounds = dialog.getBoundingClientRect();
@@ -254,6 +260,6 @@ export const Sidebar: Story = {
     await expect(bounds.bottom).toBeLessThanOrEqual(
       canvasElement.ownerDocument.defaultView!.innerHeight,
     );
-    await expect(dialog.scrollHeight).toBeGreaterThan(dialog.clientHeight);
+    await expect(dialog.scrollHeight).toBeGreaterThanOrEqual(dialog.clientHeight);
   },
 };

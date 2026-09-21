@@ -1,5 +1,5 @@
 import {
-  calculateMonthlyBankBalanceForecasts,
+  calculateBankBalanceForecasts,
   recurringCandidateToBankCashFlowEvent,
   type BankBalanceForecast,
   type BankCashFlowEventInput,
@@ -9,7 +9,8 @@ import {
   matchesRecurringCandidateIdentity,
   type RecurringCandidate,
 } from "@mf-dashboard/analytics/recurring-candidates";
-import { parseIsoDateKey } from "@mf-dashboard/date-utils";
+import { formatIsoDateKey, getDaysInMonth, parseIsoDateKey } from "@mf-dashboard/date-utils";
+import type { BankForecastManualEvent } from "@mf-dashboard/db/queries/bank-forecast-manual-event";
 import {
   createNormalTransactionMirrorKeys,
   createTransferMovementKey,
@@ -20,6 +21,7 @@ import {
   generateBankForecastCandidates,
   generateConfirmedWithdrawalCandidates,
   getForecastEventId,
+  projectRecurringCandidatesThroughDate,
   type BankForecastDismissal,
   type ForecastAccount,
   type ForecastTransaction,
@@ -197,6 +199,8 @@ export function buildBankCashFlowForecastViews(
   candidates?: RecurringCandidate[],
   cardLiabilities: ForecastCardLiability[] = [],
   dismissals: BankForecastDismissal[] = [],
+  manualEvents: BankForecastManualEvent[] = [],
+  manualEventMinDate: string = currentDate,
 ): BankCashFlowForecastView[] {
   const bankAccounts = accounts.flatMap((account) => {
     if (account.categoryName !== "銀行") return [];
@@ -232,31 +236,52 @@ export function buildBankCashFlowForecastViews(
     transactions.filter((transaction) => !hasAuthoritativeCardWithdrawal(transaction)),
     bankAccountIds,
   );
-  const forecastCandidates =
-    candidates ??
-    (() => {
-      const confirmedCandidates = generateConfirmedWithdrawalCandidates(
-        accounts,
-        transactions,
-        bankAccountIds,
-        month,
-        cardLiabilityAmounts,
-        currentDate,
-      );
-      const recurringCandidates = generateBankForecastCandidates(
-        candidateTransactions,
-        month,
-      ).filter(
-        (candidate) =>
-          !confirmedCandidates.some((confirmed) =>
-            isMirroredCandidateForConfirmedCard(candidate, confirmed, transactions),
-          ),
-      );
-      return [...recurringCandidates, ...confirmedCandidates];
-    })();
   const actualTransactions = bankTransactions.filter(
     ({ date }) => date.startsWith(month) && date <= currentDate,
   );
+  const candidateManualEvents = manualEvents.filter(
+    (event) =>
+      bankAccountIds.has(event.accountId) &&
+      event.date.startsWith(month) &&
+      event.date >= manualEventMinDate,
+  );
+  const { year, month: monthNumber } = parseIsoDateKey(currentDate);
+  const currentMonthEnd = formatIsoDateKey({
+    year,
+    month: monthNumber,
+    day: getDaysInMonth(year, monthNumber),
+  });
+  const forecastEndDate = currentMonthEnd;
+  let forecastCandidates: RecurringCandidate[];
+  if (candidates !== undefined) {
+    forecastCandidates = projectRecurringCandidatesThroughDate(candidates, forecastEndDate);
+  } else {
+    const confirmedCandidates = generateConfirmedWithdrawalCandidates(
+      accounts,
+      transactions,
+      bankAccountIds,
+      month,
+      cardLiabilityAmounts,
+      currentDate,
+    );
+    const recurringSeeds = generateBankForecastCandidates(candidateTransactions, month);
+
+    const uniqueCandidates = new Map<string, RecurringCandidate>();
+    for (const candidate of projectRecurringCandidatesThroughDate(
+      [...recurringSeeds, ...confirmedCandidates],
+      forecastEndDate,
+    )) {
+      const mirrorsCurrentConfirmedWithdrawal =
+        candidate.predictedDate <= currentMonthEnd &&
+        confirmedCandidates.some((confirmed) =>
+          isMirroredCandidateForConfirmedCard(candidate, confirmed, transactions),
+        );
+      if (!mirrorsCurrentConfirmedWithdrawal) {
+        uniqueCandidates.set(getForecastEventId(candidate), candidate);
+      }
+    }
+    forecastCandidates = [...uniqueCandidates.values()];
+  }
   const actualEvents = actualTransactions.map(toActualEvent);
   const eligibleCandidates = forecastCandidates.filter((candidate) => {
     const isDismissed = dismissals.some(
@@ -273,27 +298,60 @@ export function buildBankCashFlowForecastViews(
       !isDismissed
     );
   });
-  const forecastEvents = excludeRecordedCandidates(eligibleCandidates, actualTransactions).map(
-    (candidate) => {
-      const scheduledCandidate =
-        candidate.predictedDate < currentDate
-          ? { ...candidate, predictedDate: currentDate }
-          : candidate;
-      return recurringCandidateToBankCashFlowEvent(
-        getForecastEventId(scheduledCandidate),
-        scheduledCandidate,
-      );
-    },
-  );
+  const matchedActualTransactionIndexes = new Set<number>();
+  const forecastEvents = excludeRecordedCandidates(
+    eligibleCandidates,
+    actualTransactions,
+    matchedActualTransactionIndexes,
+  ).map((candidate) => {
+    const scheduledCandidate =
+      candidate.predictedDate < currentDate
+        ? { ...candidate, predictedDate: currentDate }
+        : candidate;
+    return recurringCandidateToBankCashFlowEvent(
+      getForecastEventId(scheduledCandidate),
+      scheduledCandidate,
+    );
+  });
 
-  const forecasts = calculateMonthlyBankBalanceForecasts(
+  const matchedManualTransactionIndexes = new Set<number>();
+  const eligibleManualEvents = candidateManualEvents.filter((event) => {
+    const matchIndex = actualTransactions.findIndex(
+      (transaction, index) =>
+        !matchedManualTransactionIndexes.has(index) &&
+        transaction.accountId === event.accountId &&
+        transaction.date === event.date &&
+        transaction.type === event.direction &&
+        Math.abs(transaction.amount) === event.amount &&
+        (!matchedActualTransactionIndexes.has(index) ||
+          matchesRecurringCandidateIdentity({ description: event.description }, transaction)),
+    );
+    if (matchIndex === -1) return true;
+
+    matchedActualTransactionIndexes.add(matchIndex);
+    matchedManualTransactionIndexes.add(matchIndex);
+    return false;
+  });
+
+  const manualForecastEvents: BankCashFlowEventInput[] = eligibleManualEvents.map((event) => ({
+    id: `manual-${event.id}`,
+    accountId: event.accountId,
+    date: event.date,
+    amount: event.amount,
+    direction: event.direction,
+    status: "forecast",
+    description: event.description,
+    amountSource: "manual",
+  }));
+  const forecasts = calculateBankBalanceForecasts(
     bankAccounts.map(({ id, totalAssets, balanceAsOfDate }) => ({
       accountId: id,
       currentBalance: totalAssets,
       balanceAsOfDate,
     })),
-    [...actualEvents, ...forecastEvents],
+    [...actualEvents, ...forecastEvents, ...manualForecastEvents],
     currentDate,
+    forecastEndDate,
   );
   const accountNames = new Map(bankAccounts.map(({ id, name }) => [id, name]));
 

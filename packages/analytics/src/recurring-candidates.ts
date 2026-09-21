@@ -39,6 +39,7 @@ export interface RecurringCandidate {
   classification: RecurringCandidateClassification;
   description: string | null;
   recurringIdentity?: string;
+  recurrenceIntervalMonths?: number;
   predictedDate: string;
   predictedAmount: number;
   amountSource?: "scheduled_withdrawal" | "liability";
@@ -60,6 +61,7 @@ interface NormalizedTransaction extends RecurringTransaction {
 }
 
 const DEFAULT_LOOKBACK_MONTHS = 12;
+const MAX_RECURRING_INTERVAL_MONTHS = 3;
 const GENERIC_DESCRIPTIONS = new Set(["payment", "入出金", "振替", "振込", "口座振替", "自動振替"]);
 const BONUS_TERMS = ["賞与", "ボーナス", "bonus"];
 
@@ -163,7 +165,16 @@ function median(values: number[]): number {
     : (sorted[middle] ?? 0);
 }
 
-function getConsecutiveSuffix(transactions: NormalizedTransaction[]): NormalizedTransaction[] {
+function getMonthDistance(from: string, to: string): number {
+  const fromMonth = parseYearMonthKey(from);
+  const toMonth = parseYearMonthKey(to);
+  return (toMonth.year - fromMonth.year) * 12 + toMonth.month - fromMonth.month;
+}
+
+function getPeriodicSuffix(transactions: NormalizedTransaction[]): {
+  occurrences: NormalizedTransaction[];
+  intervalMonths: number;
+} {
   const byMonth = new Map<string, NormalizedTransaction>();
   for (const transaction of transactions) {
     const existing = byMonth.get(transaction.month);
@@ -173,14 +184,21 @@ function getConsecutiveSuffix(transactions: NormalizedTransaction[]): Normalized
   const occurrences = [...byMonth.values()].sort((left, right) =>
     left.date.localeCompare(right.date),
   );
+  if (occurrences.length < 2) return { occurrences, intervalMonths: 1 };
+
+  const intervalMonths = getMonthDistance(occurrences.at(-2)!.month, occurrences.at(-1)!.month);
+  if (intervalMonths < 1 || intervalMonths > MAX_RECURRING_INTERVAL_MONTHS) {
+    return { occurrences: [occurrences.at(-1)!], intervalMonths: 1 };
+  }
+
   let start = occurrences.length - 1;
   while (
     start > 0 &&
-    shiftYearMonthKey(occurrences[start - 1]!.month, 1) === occurrences[start]!.month
+    getMonthDistance(occurrences[start - 1]!.month, occurrences[start]!.month) === intervalMonths
   ) {
     start--;
   }
-  return occurrences.slice(start);
+  return { occurrences: occurrences.slice(start), intervalMonths };
 }
 
 function hasStructuredIncomeClassification(transaction: NormalizedTransaction): boolean {
@@ -200,13 +218,15 @@ function createCandidate(
   transactions: NormalizedTransaction[],
   targetMonth: string,
 ): RecurringCandidate | null {
-  const occurrences = getConsecutiveSuffix(transactions);
+  const { occurrences, intervalMonths } = getPeriodicSuffix(transactions);
   const latest = occurrences.at(-1);
-  if (!latest || latest.month !== shiftYearMonthKey(targetMonth, -1)) return null;
+  if (!latest || shiftYearMonthKey(latest.month, intervalMonths) !== targetMonth) return null;
 
-  if (occurrences.length < 2 && !hasStructuredIncomeClassification(latest)) {
-    return null;
-  }
+  const minimumOccurrences = intervalMonths === 1 ? 2 : 3;
+  const isEstablishedPattern =
+    occurrences.length >= minimumOccurrences ||
+    (intervalMonths === 1 && hasStructuredIncomeClassification(latest));
+  if (!isEstablishedPattern) return null;
 
   const { year, month } = parseYearMonthKey(targetMonth);
   const predictedDay = Math.min(
@@ -222,6 +242,7 @@ function createCandidate(
     classification: latest.classification,
     description: latest.description?.trim() || null,
     recurringIdentity: latest.identity,
+    recurrenceIntervalMonths: intervalMonths,
     predictedDate: formatIsoDateKey({ year, month, day: predictedDay }),
     predictedAmount: latest.amount,
     evidence: {

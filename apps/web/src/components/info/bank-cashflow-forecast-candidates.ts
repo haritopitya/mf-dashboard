@@ -75,9 +75,8 @@ function matchesRecordedCandidate(
 export function excludeRecordedCandidates(
   candidates: RecurringCandidate[],
   actualTransactions: ForecastTransaction[],
+  matchedTransactionIndexes = new Set<number>(),
 ): RecurringCandidate[] {
-  const matchedTransactionIndexes = new Set<number>();
-
   return candidates.filter((candidate) => {
     const matchIndex = actualTransactions.findIndex(
       (transaction, index) =>
@@ -105,6 +104,7 @@ export function generateBankForecastCandidates(
   )
     .filter(
       (staleCandidate) =>
+        (staleCandidate.recurrenceIntervalMonths ?? 1) === 1 &&
         staleCandidate.evidence.occurrenceCount >= 2 &&
         !currentCandidates.some(
           (currentCandidate) =>
@@ -119,6 +119,28 @@ export function generateBankForecastCandidates(
     }));
 
   return [...currentCandidates, ...staleCandidates];
+}
+
+export function projectRecurringCandidatesThroughDate(
+  candidates: RecurringCandidate[],
+  endDate: string,
+): RecurringCandidate[] {
+  const projectedCandidates: RecurringCandidate[] = [];
+
+  for (const candidate of candidates) {
+    projectedCandidates.push(candidate);
+
+    const intervalMonths = candidate.recurrenceIntervalMonths;
+    if (!intervalMonths || intervalMonths < 1) continue;
+
+    for (let monthOffset = intervalMonths; ; monthOffset += intervalMonths) {
+      const predictedDate = addMonthsToIsoDateKey(candidate.predictedDate, monthOffset);
+      if (predictedDate > endDate) break;
+      projectedCandidates.push({ ...candidate, predictedDate });
+    }
+  }
+
+  return projectedCandidates;
 }
 
 function getCardWithdrawalAmount(

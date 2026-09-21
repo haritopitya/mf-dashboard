@@ -16,8 +16,9 @@ const forecasts: BankCashFlowForecastView[] = [
     currentBalance: 420_000,
     forecastBoundaryDate: "2026-08-03",
     monthStartDate: "2026-08-01",
+    forecastEndDate: "2026-08-31",
     openingBalance: 415_000,
-    monthEndBalance: 560_000,
+    forecastEndBalance: 560_000,
     days: [
       {
         date: "2026-08-02",
@@ -113,8 +114,9 @@ const forecasts: BankCashFlowForecastView[] = [
     currentBalance: 85_000,
     forecastBoundaryDate: "2026-08-03",
     monthStartDate: "2026-08-01",
+    forecastEndDate: "2026-08-31",
     openingBalance: 85_000,
-    monthEndBalance: 85_000,
+    forecastEndBalance: 85_000,
     days: [],
   },
 ];
@@ -137,7 +139,9 @@ export const Default: Story = {
     const guide = await within(canvasElement.ownerDocument.body).findByRole("dialog", {
       name: "表示の見方",
     });
-    await expect(within(guide).getByText(/今月だけの参考値/)).toBeInTheDocument();
+    await expect(
+      within(guide).getByText(/今月末までの実績と予測.*将来月の手入力予定は、その月になる/),
+    ).toBeInTheDocument();
     await userEvent.click(canvas.getByRole("button", { name: "表示の見方" }));
     await userEvent.click(canvas.getByRole("button", { name: "銀行 Aの入出金詳細を開く" }));
     const details = await within(canvasElement.ownerDocument.body).findByRole("dialog", {
@@ -158,7 +162,7 @@ export const NegativeForecast: Story = {
         ...forecasts[0]!,
         accountName: "銀行 C",
         currentBalance: 20_000,
-        monthEndBalance: -60_000,
+        forecastEndBalance: -60_000,
       },
     ],
   },

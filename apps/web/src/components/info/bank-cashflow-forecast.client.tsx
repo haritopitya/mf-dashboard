@@ -5,11 +5,12 @@ import type {
   CalculatedBankCashFlowEvent,
 } from "@mf-dashboard/analytics/bank-balance-forecast";
 import type { RecurringCandidateClassification } from "@mf-dashboard/analytics/recurring-candidates";
+import type { BankForecastManualEvent } from "@mf-dashboard/db/queries/bank-forecast-manual-event";
 import { CircleHelp, EyeOff, Landmark } from "lucide-react";
 import { useRouter } from "next/navigation";
-import { useState, useTransition } from "react";
+import { useEffect, useState, useTransition } from "react";
 import { withBasePath } from "../../lib/base-path";
-import { formatCurrency, formatDateShort } from "../../lib/format";
+import { formatCurrency, formatDate, formatDateShort } from "../../lib/format";
 import { cn } from "../../lib/utils";
 import { AmountDisplay } from "../ui/amount-display";
 import { Badge } from "../ui/badge";
@@ -24,12 +25,20 @@ import {
   DialogTrigger,
 } from "../ui/dialog";
 import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover";
+import {
+  BANK_FORECAST_ANCHOR_CHANGE_EVENT,
+  getBankForecastAnchorId,
+} from "./bank-cashflow-forecast-anchor";
 import type { BankCashFlowForecastView } from "./bank-cashflow-forecast-data";
+import { BankForecastManualEventsClient } from "./bank-forecast-manual-events.client";
 
 interface BankCashFlowForecastClientProps {
   forecasts: BankCashFlowForecastView[];
+  accounts?: Array<{ id: number; name: string }>;
+  manualEvents?: BankForecastManualEvent[];
+  manualEventMinDate?: string;
   groupId?: string;
-  allowForecastDismissal?: boolean;
+  allowForecastChanges?: boolean;
 }
 
 const statusDetails: Record<
@@ -43,6 +52,7 @@ const statusDetails: Record<
 const amountSourceDetails = {
   scheduled_withdrawal: { label: "確定", variant: "default" },
   liability: { label: "残高参考", variant: "warning" },
+  manual: { label: "手入力", variant: "secondary" },
 } as const;
 
 const classificationLabels: Record<RecurringCandidateClassification, string> = {
@@ -55,8 +65,15 @@ const classificationLabels: Record<RecurringCandidateClassification, string> = {
   other: "定期的な入出金",
 };
 
+function getRecurrencePrefix(intervalMonths: number | undefined): string {
+  if (intervalMonths === 2) return "隔月の";
+  if (intervalMonths === 3) return "3か月ごとの";
+  return "";
+}
+
 function getEvidenceText(event: CalculatedBankCashFlowEvent): string {
   if (event.status === "actual") return "Money Forwardの実績データ";
+  if (event.amountSource === "manual") return "手入力した入出金予定";
 
   const classification = classificationLabels[event.classification ?? "other"];
   const evidence = event.evidence;
@@ -80,18 +97,19 @@ function getEvidenceText(event: CalculatedBankCashFlowEvent): string {
     evidence.dateRange.from === evidence.dateRange.to
       ? formatDateShort(evidence.dateRange.from)
       : `${formatDateShort(evidence.dateRange.from)}〜${formatDateShort(evidence.dateRange.to)}`;
-  return `${classification}の過去${evidence.occurrenceCount}回（${dateRange}、${amountRange}）から推定`;
+  const recurrencePrefix = getRecurrencePrefix(event.recurrenceIntervalMonths);
+  return `${recurrencePrefix}${classification}の過去${evidence.occurrenceCount}回（${dateRange}、${amountRange}）から推定`;
 }
 
 function ForecastEvent({
   event,
   groupId,
-  allowForecastDismissal,
+  allowForecastChanges,
   onDismissed,
 }: {
   event: CalculatedBankCashFlowEvent;
   groupId?: string;
-  allowForecastDismissal: boolean;
+  allowForecastChanges: boolean;
   onDismissed: () => void;
 }) {
   const [error, setError] = useState(false);
@@ -102,7 +120,7 @@ function ForecastEvent({
     : statusDetails[event.status];
   const signedAmount = event.direction === "income" ? event.amount : -event.amount;
   const dismissal =
-    allowForecastDismissal &&
+    allowForecastChanges &&
     event.status === "forecast" &&
     !event.amountSource &&
     typeof event.accountId === "number" &&
@@ -223,9 +241,9 @@ function BalanceSummary({
       className={cn("grid shrink-0 grid-cols-2 gap-x-4 gap-y-1 text-right sm:gap-x-6", className)}
     >
       <span className="text-xs text-muted-foreground">現在残高</span>
-      <span className="text-xs text-muted-foreground">月末予測残高</span>
+      <span className="text-xs text-muted-foreground">今月末予測残高</span>
       <AmountDisplay amount={forecast.currentBalance} type="balance" weight="semibold" />
-      <AmountDisplay amount={forecast.monthEndBalance} type="balance" weight="bold" />
+      <AmountDisplay amount={forecast.forecastEndBalance} type="balance" weight="bold" />
     </span>
   );
 }
@@ -233,16 +251,40 @@ function BalanceSummary({
 function BankForecastCard({
   forecast,
   groupId,
-  allowForecastDismissal,
+  allowForecastChanges,
   onForecastDismissed,
 }: {
   forecast: BankCashFlowForecastView;
   groupId?: string;
-  allowForecastDismissal: boolean;
+  allowForecastChanges: boolean;
   onForecastDismissed: () => void;
 }) {
   const [isOpen, setIsOpen] = useState(false);
+  const anchorId = getBankForecastAnchorId(forecast.accountId);
   const eventCount = getEventCount(forecast);
+  const formatForecastDate =
+    forecast.monthStartDate.slice(0, 4) === forecast.forecastEndDate.slice(0, 4)
+      ? formatDateShort
+      : formatDate;
+
+  useEffect(() => {
+    const syncOpenStateWithHash = () => setIsOpen(window.location.hash === `#${anchorId}`);
+    syncOpenStateWithHash();
+    window.addEventListener("hashchange", syncOpenStateWithHash);
+    window.addEventListener(BANK_FORECAST_ANCHOR_CHANGE_EVENT, syncOpenStateWithHash);
+    return () => {
+      window.removeEventListener("hashchange", syncOpenStateWithHash);
+      window.removeEventListener(BANK_FORECAST_ANCHOR_CHANGE_EVENT, syncOpenStateWithHash);
+    };
+  }, [anchorId]);
+
+  function handleOpenChange(open: boolean) {
+    setIsOpen(open);
+    if (!open && window.location.hash === `#${anchorId}`) {
+      window.history.replaceState(null, "", `${window.location.pathname}${window.location.search}`);
+    }
+  }
+
   const summary = (
     <span className="flex items-start justify-between gap-4">
       <span className="min-w-0">
@@ -256,15 +298,20 @@ function BankForecastCard({
   );
 
   if (eventCount === 0 && !isOpen) {
-    return <Card className="p-4">{summary}</Card>;
+    return (
+      <Card id={anchorId} className="scroll-mt-20 p-4">
+        {summary}
+      </Card>
+    );
   }
 
   return (
-    <Dialog open={isOpen} onOpenChange={setIsOpen}>
+    <Dialog open={isOpen} onOpenChange={handleOpenChange}>
       <DialogTrigger>
         <CardButton
+          id={anchorId}
           aria-label={`${forecast.accountName}の入出金詳細を開く`}
-          className="border-primary/30 p-4 hover:border-primary"
+          className="scroll-mt-20 border-primary/30 p-4 hover:border-primary"
         >
           {summary}
         </CardButton>
@@ -274,7 +321,8 @@ function BankForecastCard({
           <div className="min-w-0">
             <DialogTitle>{forecast.accountName}の入出金詳細</DialogTitle>
             <DialogDescription>
-              {formatDateShort(forecast.monthStartDate)}からの実績と予測
+              {formatForecastDate(forecast.monthStartDate)}〜
+              {formatForecastDate(forecast.forecastEndDate)}の実績と予測
             </DialogDescription>
           </div>
           <BalanceSummary
@@ -295,7 +343,7 @@ function BankForecastCard({
           {forecast.days.map((day) => (
             <section key={day.date}>
               <div className="flex flex-wrap items-baseline justify-between gap-2 rounded-md bg-muted/50 px-3 py-2">
-                <h3 className="text-sm font-semibold">{formatDateShort(day.date)}</h3>
+                <h3 className="text-sm font-semibold">{formatForecastDate(day.date)}</h3>
                 <span className="text-xs text-muted-foreground">
                   取引後残高: <AmountDisplay amount={day.closingBalance} type="balance" size="sm" />
                 </span>
@@ -306,7 +354,7 @@ function BankForecastCard({
                     key={event.id}
                     event={event}
                     groupId={groupId}
-                    allowForecastDismissal={allowForecastDismissal}
+                    allowForecastChanges={allowForecastChanges}
                     onDismissed={onForecastDismissed}
                   />
                 ))}
@@ -321,14 +369,22 @@ function BankForecastCard({
 
 export function BankCashFlowForecastClient({
   forecasts,
+  accounts,
+  manualEvents = [],
+  manualEventMinDate,
   groupId,
-  allowForecastDismissal = true,
+  allowForecastChanges = true,
 }: BankCashFlowForecastClientProps) {
   const router = useRouter();
   const firstForecast = forecasts[0];
-  if (!firstForecast) return null;
+  const minDate = manualEventMinDate ?? firstForecast?.forecastBoundaryDate;
+  if (!minDate) return null;
 
-  const month = Number(firstForecast.monthStartDate.slice(5, 7));
+  const month = Number((firstForecast?.monthStartDate ?? minDate).slice(5, 7));
+  const accountOptions =
+    accounts ??
+    forecasts.map(({ accountId, accountName }) => ({ id: Number(accountId), name: accountName }));
+  if (accountOptions.length === 0) return null;
   const sortedForecasts = [...forecasts].sort(
     (left, right) =>
       getEventCount(right) - getEventCount(left) || right.currentBalance - left.currentBalance,
@@ -396,9 +452,19 @@ export function BankCashFlowForecastClient({
                     引き落とし予定額が未定のため、カード利用残高を参考にしています。
                   </dd>
                 </div>
+                <div className="space-y-1">
+                  <dt>
+                    <Badge variant={amountSourceDetails.manual.variant}>
+                      {amountSourceDetails.manual.label}
+                    </Badge>
+                  </dt>
+                  <dd className="text-xs leading-relaxed text-muted-foreground">
+                    登録した将来の入出金予定です。
+                  </dd>
+                </div>
               </dl>
               <p className="border-t pt-3 text-xs leading-relaxed text-muted-foreground">
-                今月だけの参考値です。定期性を判定できない臨時入出金などは反映されず、将来の残高を保証しません。過去月表示と任意月への切替は対象外です。
+                今月末までの実績と予測を表示します。将来月の手入力予定は、その月になると予測へ反映されます。定期性を判定できない臨時入出金は、手入力しない限り反映されず、将来の残高を保証しません。過去月表示と任意月への切替は対象外です。
               </p>
             </PopoverContent>
           </Popover>
@@ -406,16 +472,29 @@ export function BankCashFlowForecastClient({
       </CardHeader>
       <CardContent className="space-y-4">
         <div className="grid gap-4 lg:grid-cols-2">
+          {forecasts.length === 0 ? (
+            <p className="py-8 text-center text-sm text-muted-foreground lg:col-span-2">
+              残高予測に必要な最新の口座残高がありません。
+            </p>
+          ) : null}
           {sortedForecasts.map((forecast) => (
             <BankForecastCard
               key={forecast.accountId}
               forecast={forecast}
               groupId={groupId}
-              allowForecastDismissal={allowForecastDismissal}
+              allowForecastChanges={allowForecastChanges}
               onForecastDismissed={() => router.refresh()}
             />
           ))}
         </div>
+        <BankForecastManualEventsClient
+          accounts={accountOptions}
+          events={manualEvents}
+          minDate={minDate}
+          groupId={groupId}
+          allowEditing={allowForecastChanges}
+          onChanged={() => router.refresh()}
+        />
       </CardContent>
     </Card>
   );

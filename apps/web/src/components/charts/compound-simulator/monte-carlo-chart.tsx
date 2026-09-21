@@ -14,10 +14,8 @@ import {
 } from "recharts";
 import { CHART_INITIAL_DIMENSION } from "../../../lib/chart";
 import { formatCurrency } from "../../../lib/format";
-import { MetricLabel } from "../../ui/metric-label";
-import { Slider } from "../../ui/slider";
 import { chartTooltipStyle } from "../chart-tooltip";
-import type { FanChartDataPoint } from "./compound-simulator-utils";
+import { formatYAxisAmount, type FanChartDataPoint } from "./compound-simulator-utils";
 
 export interface MonteCarloChartProps {
   fanChartData: FanChartDataPoint[];
@@ -27,12 +25,27 @@ export interface MonteCarloChartProps {
   contributionYears: number;
   withdrawalStartYear: number;
   totalYears: number;
-  inflationRate: number;
-  onInflationRateChange: (value: number) => void;
-  volatility: number;
-  onVolatilityChange: (value: number) => void;
   copyData: unknown;
 }
+
+const LEGEND_ITEMS = [
+  {
+    label: "中央値",
+    markerClassName: "h-0.5 w-5 bg-[var(--color-chart-5)]",
+  },
+  {
+    label: "半数のケースが入る範囲",
+    markerClassName: "h-3 w-5 rounded-sm bg-[var(--color-chart-5)] opacity-25",
+  },
+  {
+    label: "薄い帯を含む8割のケースが入る範囲",
+    markerClassName: "h-3 w-5 rounded-sm bg-[var(--color-chart-5)] opacity-10",
+  },
+  {
+    label: "投入元本",
+    markerClassName: "w-5 border-t border-dashed border-muted-foreground",
+  },
+] as const;
 
 export function MonteCarloChart({
   fanChartData,
@@ -42,10 +55,6 @@ export function MonteCarloChart({
   contributionYears,
   withdrawalStartYear,
   totalYears,
-  inflationRate,
-  onInflationRateChange,
-  volatility,
-  onVolatilityChange,
   copyData,
 }: MonteCarloChartProps) {
   let taxDescription = "";
@@ -54,93 +63,23 @@ export function MonteCarloChart({
 
   return (
     <div className="space-y-4 border-t pt-6">
-      <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
-        <div>
-          <h3 className="text-sm font-semibold">モンテカルロ・シミュレーション</h3>
-          <p className="text-xs text-muted-foreground">
-            5,000通りのランダムなシナリオに基づく将来予測。インフレを差し引いた実質値（今の貨幣価値に換算
-            {taxDescription}
-            ）で表示しています。
-            <br />
-            薄い帯が全シナリオの80%、その内側の濃い帯が中央50%を示します（残り20%は帯の外側）
-          </p>
-        </div>
-        <div className="grid gap-4 sm:grid-cols-2 md:flex md:items-center md:gap-4">
-          <div className="space-y-1 md:w-32">
-            <div className="flex items-center justify-between">
-              <MetricLabel
-                title="インフレ率"
-                description="今の100万円が将来いくらの価値になるかに影響します。日本の直近インフレ率は約2〜3%です。名目リターンから差し引いて実質リターンを算出し、グラフは購買力ベース（実質値）で表示されます"
-              />
-              <span className="text-xs font-semibold text-primary">{inflationRate}%</span>
-            </div>
-            <Slider
-              value={inflationRate}
-              onValueChange={onInflationRateChange}
-              min={0}
-              max={10}
-              step={0.5}
-              aria-label="インフレ率"
-              ticks={[
-                { value: 0, label: "0%" },
-                { value: 5, label: "5%" },
-                { value: 10, label: "10%" },
-              ]}
-            />
-          </div>
-          <div className="space-y-1 md:w-40">
-            <div className="flex items-center justify-between">
-              <MetricLabel
-                title="ボラティリティ"
-                description={
-                  <div className="space-y-1.5">
-                    <p>年率の価格変動幅。値が大きいほどリターンのばらつきが大きくなります。</p>
-                    <table className="w-full text-xs">
-                      <thead>
-                        <tr className="border-b">
-                          <th className="pb-1 text-left font-medium">資産クラス</th>
-                          <th className="pb-1 text-right font-medium">目安</th>
-                        </tr>
-                      </thead>
-                      <tbody className="tabular-nums">
-                        <tr>
-                          <td>全世界株式 (MSCI ACWI)</td>
-                          <td className="text-right">14〜17%</td>
-                        </tr>
-                        <tr>
-                          <td>先進国株式 (S&amp;P500等)</td>
-                          <td className="text-right">15〜19%</td>
-                        </tr>
-                        <tr>
-                          <td>バランス型 (株60/債40)</td>
-                          <td className="text-right">8〜11%</td>
-                        </tr>
-                        <tr>
-                          <td>債券中心</td>
-                          <td className="text-right">3〜8%</td>
-                        </tr>
-                      </tbody>
-                    </table>
-                  </div>
-                }
-              />
-              <span className="text-xs font-semibold text-primary">{volatility}%</span>
-            </div>
-            <Slider
-              value={volatility}
-              onValueChange={onVolatilityChange}
-              min={5}
-              max={30}
-              step={1}
-              aria-label="ボラティリティ"
-              ticks={[
-                { value: 5, label: "5%" },
-                { value: 10, label: "10%" },
-                { value: 20, label: "20%" },
-                { value: 30, label: "30%" },
-              ]}
-            />
-          </div>
+      <div>
+        <h3 className="text-sm font-semibold">モンテカルロ・シミュレーション</h3>
+        <p className="text-xs text-muted-foreground">
+          5,000通りのランダムなシナリオに基づく将来予測。インフレを差し引いた実質値（今の貨幣価値に換算
+          {taxDescription}
+          ）で表示しています。
+        </p>
+        <div
+          className="flex flex-wrap gap-x-4 text-xs text-muted-foreground"
+          aria-label="グラフの凡例"
+        >
+          {LEGEND_ITEMS.map((item) => (
+            <span key={item.label} className="inline-flex items-center gap-1.5">
+              <span className={item.markerClassName} aria-hidden="true" />
+              {item.label}
+            </span>
+          ))}
         </div>
       </div>
 
@@ -160,7 +99,7 @@ export function MonteCarloChart({
             tick={{ fontSize: 12 }}
             tickLine={false}
             axisLine={false}
-            tickFormatter={(value) => `${(value / 10000).toFixed(0)}万`}
+            tickFormatter={formatYAxisAmount}
           />
           <Tooltip content={<FanChartTooltip currentAge={currentAge} />} />
           <Area type="monotone" dataKey="base" stackId="fan" fill="transparent" stroke="none" />
@@ -217,7 +156,7 @@ export function MonteCarloChart({
             <ReferenceLine
               x={contributionYears}
               stroke="var(--color-muted-foreground)"
-              strokeDasharray="4 4"
+              strokeDasharray="2 2"
               label={{
                 value:
                   currentAge != null
@@ -233,7 +172,7 @@ export function MonteCarloChart({
             <ReferenceLine
               x={withdrawalStartYear}
               stroke="var(--color-muted-foreground)"
-              strokeDasharray="4 4"
+              strokeDasharray="2 2"
               label={{
                 value:
                   currentAge != null
@@ -281,12 +220,10 @@ function FanChartTooltip({
   if (!data) return null;
 
   const rows = [
-    { label: "90%タイル", value: data.p90 as number },
-    { label: "75%タイル", value: data.p75 as number },
-    { label: "中央値", value: data.p50 as number },
-    { label: "25%タイル", value: data.p25 as number },
-    { label: "10%タイル", value: data.p10 as number },
-    { label: "元本", value: data.principal as number },
+    { label: "中央値", value: data.p50 as number, emphasized: true },
+    { label: "上振れケース（上位10%）", value: data.p90 as number },
+    { label: "下振れケース（下位10%）", value: data.p10 as number },
+    { label: "投入元本", value: data.principal as number },
   ];
 
   const isContributing = data.isContributing as boolean;
@@ -311,13 +248,17 @@ function FanChartTooltip({
       {rows.map((row) => (
         <div key={row.label} className="flex justify-between gap-4">
           <span className="text-muted-foreground">{row.label}</span>
-          <span className="font-medium">{formatCurrency(row.value)}</span>
+          <span className={row.emphasized ? "font-semibold" : "font-medium"}>
+            {formatCurrency(row.value)}
+          </span>
         </div>
       ))}
-      {depletionRate != null && depletionRate > 0 && (
+      {isWithdrawing && (
         <div className="mt-1 flex justify-between gap-4 border-t pt-1">
           <span className="text-muted-foreground">枯渇率</span>
-          <span className="font-medium text-expense">{(depletionRate * 100).toFixed(1)}%</span>
+          <span className="font-medium text-expense">
+            {((depletionRate ?? 0) * 100).toFixed(1)}%
+          </span>
         </div>
       )}
     </div>

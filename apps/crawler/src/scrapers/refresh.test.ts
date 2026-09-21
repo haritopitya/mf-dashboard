@@ -115,25 +115,35 @@ describe("getRefreshStatus", () => {
 });
 
 describe("navigateToAccountsPage", () => {
-  test("accountsページへの遷移がERR_ABORTEDでも1回だけ再試行する", async () => {
-    const goto = vi.fn<(...args: any[]) => any>().mockImplementationOnce(() => {
-      throw new Error("page.goto: net::ERR_ABORTED at https://moneyforward.com/accounts");
-    });
-    const waitForLoadState = vi.fn<(...args: any[]) => any>().mockResolvedValue(undefined);
-    const waitForTimeout = vi.fn<(...args: any[]) => any>().mockResolvedValue(undefined);
+  test.each([
+    "page.goto: net::ERR_ABORTED at https://moneyforward.com/accounts",
+    "page.goto: Timeout 30000ms exceeded.",
+  ])("一時的な遷移エラーを1回だけ再試行する: %s", async (message) => {
+    const goto = vi
+      .fn<(...args: any[]) => any>()
+      .mockRejectedValueOnce(new Error(message))
+      .mockResolvedValueOnce(null);
     const isClosed = vi.fn<(...args: any[]) => any>().mockReturnValue(false);
+    const retryPage = { goto, isClosed } as unknown as Page;
 
-    const retryPage = {
-      goto,
-      waitForLoadState,
-      waitForTimeout,
-      isClosed,
-    } as unknown as Page;
-
-    await navigateToAccountsPage(retryPage);
+    await navigateToAccountsPage(retryPage, { retryDelayMs: 0 });
 
     expect(goto).toHaveBeenCalledTimes(2);
-    expect(waitForTimeout).toHaveBeenCalledWith(1000);
-    expect(waitForLoadState).toHaveBeenCalledTimes(1);
+    expect(goto).toHaveBeenCalledWith(
+      "https://moneyforward.com/accounts",
+      expect.objectContaining({ timeout: 60000, waitUntil: "domcontentloaded" }),
+    );
+  });
+
+  test("Page crashedは再試行せず元のエラーを返す", async () => {
+    const error = new Error("page.goto: Page crashed");
+    const goto = vi.fn<(...args: any[]) => any>().mockRejectedValue(error);
+    const page = {
+      goto,
+      isClosed: vi.fn<(...args: any[]) => any>().mockReturnValue(false),
+    } as unknown as Page;
+
+    await expect(navigateToAccountsPage(page, { retryDelayMs: 0 })).rejects.toBe(error);
+    expect(goto).toHaveBeenCalledOnce();
   });
 });

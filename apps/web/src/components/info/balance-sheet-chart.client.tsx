@@ -14,6 +14,65 @@ interface BalanceSheetChartProps {
   assets: Array<{ category: string; amount: number }>;
   liabilities: Array<{ category: string; amount: number }>;
   netAssets: number;
+  totalAssets: number;
+}
+
+export function getBalanceSheetShare(amount: number, total: number) {
+  return total === 0 ? 0 : (amount / total) * 100;
+}
+
+interface BalanceSheetTooltipProps {
+  active?: boolean;
+  payload?: Array<{ name: string; value: number; fill: string }>;
+  label?: string;
+  totalAssets: number;
+  totalLiabilities: number;
+  netAssets: number;
+}
+
+export function BalanceSheetTooltip({
+  active,
+  payload,
+  label,
+  totalAssets,
+  totalLiabilities,
+  netAssets,
+}: BalanceSheetTooltipProps) {
+  if (!active || !payload || payload.length === 0) return null;
+
+  const isAssetSide = label === "資産";
+  const total = isAssetSide ? totalAssets : totalLiabilities + netAssets;
+
+  return (
+    <ChartTooltipContent>
+      <div className="font-bold mb-2">{label}</div>
+      {sortByAmountDescending(
+        payload.filter((item) => Number.isFinite(item.value)),
+        (item) => item.value,
+        (item) => item.name,
+      ).map((item) => (
+        <div key={item.name} className="flex justify-between gap-4">
+          <span className="flex items-center gap-2">
+            <span className="w-3 h-3 rounded-sm" style={{ backgroundColor: item.fill }} />
+            {item.name}
+          </span>
+          <AmountDisplay
+            amount={item.value}
+            weight="medium"
+            percentage={getBalanceSheetShare(item.value, total)}
+            fixedWidth
+          />
+        </div>
+      ))}
+      <div className="flex justify-between gap-4 mt-2 pt-2 border-t font-bold">
+        <span>合計</span>
+        <span className="flex items-baseline">
+          <AmountDisplay amount={total} weight="bold" fixedWidth />
+          <span aria-hidden="true" className="ml-1 inline-block min-w-14" />
+        </span>
+      </div>
+    </ChartTooltipContent>
+  );
 }
 
 export function getBalanceSheetChartOrder(
@@ -50,6 +109,7 @@ export function BalanceSheetChartClient({
   assets,
   liabilities,
   netAssets,
+  totalAssets,
 }: BalanceSheetChartProps) {
   const [isMobile, setIsMobile] = useState(false);
 
@@ -60,7 +120,6 @@ export function BalanceSheetChartClient({
     return () => window.removeEventListener("resize", checkMobile);
   }, []);
 
-  const totalAssets = assets.reduce((sum, a) => sum + a.amount, 0);
   const totalLiabilities = liabilities.reduce((sum, l) => sum + l.amount, 0);
   const { orderedAssets, stackedAssetKeys, legendKeys, stackedBalanceKeys } =
     getBalanceSheetChartOrder(assets, totalLiabilities, netAssets);
@@ -81,45 +140,6 @@ export function BalanceSheetChartClient({
   const getLegendOrder = (name: string) => {
     const index = legendKeys.indexOf(name);
     return index === -1 ? Number.MAX_SAFE_INTEGER : index;
-  };
-
-  // カスタムツールチップ
-  const CustomTooltip = ({
-    active,
-    payload,
-    label,
-  }: {
-    active?: boolean;
-    payload?: Array<{ name: string; value: number; fill: string }>;
-    label?: string;
-  }) => {
-    if (!active || !payload || payload.length === 0) return null;
-
-    const isAssetSide = label === "資産";
-    const total = isAssetSide ? totalAssets : totalLiabilities + netAssets;
-
-    return (
-      <ChartTooltipContent>
-        <div className="font-bold mb-2">{label}</div>
-        {sortByAmountDescending(
-          payload.filter((item) => Number.isFinite(item.value)),
-          (item) => item.value,
-          (item) => item.name,
-        ).map((p) => (
-          <div key={p.name} className="flex justify-between gap-4">
-            <span className="flex items-center gap-2">
-              <span className="w-3 h-3 rounded-sm" style={{ backgroundColor: p.fill }} />
-              {p.name}
-            </span>
-            <AmountDisplay amount={p.value} weight="medium" />
-          </div>
-        ))}
-        <div className="flex justify-between gap-4 mt-2 pt-2 border-t font-bold">
-          <span>合計</span>
-          <AmountDisplay amount={total} weight="bold" />
-        </div>
-      </ChartTooltipContent>
-    );
   };
 
   return (
@@ -150,7 +170,15 @@ export function BalanceSheetChartClient({
               axisLine={{ stroke: "#E2E8F0" }}
               tickLine={false}
             />
-            <Tooltip content={<CustomTooltip />} />
+            <Tooltip
+              content={
+                <BalanceSheetTooltip
+                  totalAssets={totalAssets}
+                  totalLiabilities={totalLiabilities}
+                  netAssets={netAssets}
+                />
+              }
+            />
             <Legend
               itemSorter={(item) => getLegendOrder(String(item.value))}
               verticalAlign="bottom"

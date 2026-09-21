@@ -1,10 +1,10 @@
 import { getJstTodayIsoDate, shiftYearMonthKey } from "@mf-dashboard/date-utils";
 import { getAccountsWithAssets } from "@mf-dashboard/db/queries/account";
 import { getBankForecastDismissals } from "@mf-dashboard/db/queries/bank-forecast-dismissal";
+import { getBankForecastManualEvents } from "@mf-dashboard/db/queries/bank-forecast-manual-event";
 import { getHoldingsWithLatestValues } from "@mf-dashboard/db/queries/holding";
 import { getTransactions } from "@mf-dashboard/db/queries/transaction";
-import { Landmark } from "lucide-react";
-import { EmptyState } from "../ui/empty-state";
+import { cache } from "react";
 import {
   buildBankCashFlowForecastViews,
   getBankForecastCurrentDate,
@@ -17,18 +17,25 @@ interface BankCashFlowForecastProps {
 
 const CARD_LIABILITY_CATEGORY = "クレジットカード利用残高";
 
-export async function BankCashFlowForecast({ groupId }: BankCashFlowForecastProps) {
+const getBankCashFlowForecastData = cache(async (groupId?: string) => {
+  const manualEventMinDate = getJstTodayIsoDate();
   const currentDate = getBankForecastCurrentDate(
-    getJstTodayIsoDate(),
+    manualEventMinDate,
     process.env.DEMO_MODE === "true",
   );
   const historyStartDate = `${shiftYearMonthKey(currentDate.slice(0, 7), -12)}-01`;
-  const [selectedAccounts, selectedTransactions, selectedHoldings, dismissals] = await Promise.all([
-    getAccountsWithAssets(groupId),
-    getTransactions({ groupId, startDate: historyStartDate, includeTransferTargetAccounts: true }),
-    getHoldingsWithLatestValues(groupId),
-    getBankForecastDismissals(groupId),
-  ]);
+  const [selectedAccounts, selectedTransactions, selectedHoldings, dismissals, manualEvents] =
+    await Promise.all([
+      getAccountsWithAssets(groupId),
+      getTransactions({
+        groupId,
+        startDate: historyStartDate,
+        includeTransferTargetAccounts: true,
+      }),
+      getHoldingsWithLatestValues(groupId),
+      getBankForecastDismissals(groupId),
+      getBankForecastManualEvents(groupId),
+    ]);
   const selectedBankIds = new Set(
     selectedAccounts.filter(({ categoryName }) => categoryName === "銀行").map(({ id }) => id),
   );
@@ -113,17 +120,31 @@ export async function BankCashFlowForecast({ groupId }: BankCashFlowForecastProp
     undefined,
     cardLiabilities,
     dismissals,
+    manualEvents,
+    manualEventMinDate,
   );
+  const bankAccounts = selectedAccounts.flatMap(({ id, name, categoryName }) =>
+    categoryName === "銀行" ? [{ id, name }] : [],
+  );
+  return { forecasts, manualEvents, manualEventMinDate, bankAccounts };
+});
 
-  if (forecasts.length === 0) {
-    return <EmptyState icon={Landmark} title="今月の銀行別予測" />;
-  }
+export async function getBankCashFlowForecastViews(groupId?: string) {
+  return (await getBankCashFlowForecastData(groupId)).forecasts;
+}
+
+export async function BankCashFlowForecast({ groupId }: BankCashFlowForecastProps) {
+  const { forecasts, manualEvents, manualEventMinDate, bankAccounts } =
+    await getBankCashFlowForecastData(groupId);
 
   return (
     <BankCashFlowForecastClient
       forecasts={forecasts}
+      accounts={bankAccounts}
+      manualEvents={manualEvents}
+      manualEventMinDate={manualEventMinDate}
       groupId={groupId}
-      allowForecastDismissal={process.env.VERCEL !== "1"}
+      allowForecastChanges={process.env.VERCEL !== "1"}
     />
   );
 }

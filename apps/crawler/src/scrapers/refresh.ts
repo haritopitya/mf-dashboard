@@ -6,28 +6,43 @@ import { debug, info, warn } from "../logger.js";
 const DEFAULT_MAX_WAIT_MINUTES = 20;
 const POLL_INTERVAL_MS = 30000; // 30 seconds
 const NAVIGATION_RETRY_DELAY_MS = 1000;
+const NAVIGATION_TIMEOUT_MS = 60000;
 
-export async function navigateToAccountsPage(page: Page): Promise<void> {
+interface NavigationOptions {
+  retryDelayMs?: number;
+}
+
+function isRetryableNavigationError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return message.includes("net::ERR_ABORTED") || message.includes("Timeout");
+}
+
+export async function navigateToAccountsPage(
+  page: Page,
+  options: NavigationOptions = {},
+): Promise<void> {
   const MAX_RETRIES = 1;
+  const retryDelayMs = options.retryDelayMs ?? NAVIGATION_RETRY_DELAY_MS;
 
   for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
     try {
       await page.goto(mfUrls.accounts, {
         waitUntil: "domcontentloaded",
+        timeout: NAVIGATION_TIMEOUT_MS,
       });
-      await page.waitForLoadState("networkidle");
       return;
     } catch (err) {
       if (page.isClosed()) {
         throw err;
       }
 
-      const message = err instanceof Error ? err.message : String(err);
-      if (!message.includes("net::ERR_ABORTED") || attempt === MAX_RETRIES) {
+      if (!isRetryableNavigationError(err) || attempt === MAX_RETRIES) {
         throw err;
       }
 
-      await page.waitForTimeout(NAVIGATION_RETRY_DELAY_MS);
+      // A crashed Playwright page can reject page.waitForTimeout() and mask the
+      // original navigation error. Use a process timer between attempts instead.
+      await new Promise((resolve) => setTimeout(resolve, retryDelayMs));
     }
   }
 }

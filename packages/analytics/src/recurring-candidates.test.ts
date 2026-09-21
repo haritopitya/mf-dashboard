@@ -125,6 +125,65 @@ describe("generateRecurringCandidates", () => {
     });
   });
 
+  it("forecasts a debit with a consistent two-month interval", () => {
+    const result = generateRecurringCandidates(
+      [
+        transaction("2026-02-16", 11_824, "水道料金"),
+        transaction("2026-04-16", 12_276, "水道料金"),
+        transaction("2026-06-16", 15_002, "水道料金"),
+      ],
+      "2026-08",
+    );
+
+    expect(result[0]).toMatchObject({
+      recurrenceIntervalMonths: 2,
+      predictedDate: "2026-08-16",
+      predictedAmount: 15_002,
+      evidence: { occurrenceCount: 3 },
+    });
+  });
+
+  it("does not forecast a two-month interval debit in the intervening month", () => {
+    expect(
+      generateRecurringCandidates(
+        [
+          transaction("2026-02-16", 11_824, "水道料金"),
+          transaction("2026-04-16", 12_276, "水道料金"),
+          transaction("2026-06-16", 15_002, "水道料金"),
+        ],
+        "2026-07",
+      ),
+    ).toEqual([]);
+  });
+
+  it("forecasts a debit with a consistent three-month interval", () => {
+    const result = generateRecurringCandidates(
+      [
+        transaction("2025-11-30", 30_000, "定期請求"),
+        transaction("2026-02-28", 30_000, "定期請求"),
+        transaction("2026-05-31", 30_000, "定期請求"),
+      ],
+      "2026-08",
+    );
+
+    expect(result[0]).toMatchObject({
+      predictedDate: "2026-08-30",
+      evidence: { occurrenceCount: 3 },
+    });
+  });
+
+  it("does not infer a multi-month interval from only two occurrences", () => {
+    expect(
+      generateRecurringCandidates(
+        [
+          transaction("2026-04-10", 10_000, "Service"),
+          transaction("2026-06-10", 10_000, "Service"),
+        ],
+        "2026-08",
+      ),
+    ).toEqual([]);
+  });
+
   it("does not forecast a stream that stopped or skipped a month", () => {
     expect(
       generateRecurringCandidates(

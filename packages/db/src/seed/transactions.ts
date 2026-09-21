@@ -560,10 +560,10 @@ export const txTemplates: TxTemplate[] = [
   {
     category: "",
     subCategory: "",
-    description: "楽天銀行へ振替",
+    description: "三井住友銀行へ振替",
     type: "transfer",
-    minAmount: 50000,
-    maxAmount: 50000,
+    minAmount: 150000,
+    maxAmount: 150000,
     accountName: "三井住友銀行",
     frequency: "monthly",
     fixedDay: 26,

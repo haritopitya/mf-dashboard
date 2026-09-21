@@ -83,12 +83,320 @@ describe("buildBankCashFlowForecastViews", () => {
       accountName: "銀行 A",
       currentBalance: 100_000,
       openingBalance: 95_000,
-      monthEndBalance: 90_000,
+      forecastEndBalance: 90_000,
     });
     expect(forecasts[0]?.days.flatMap(({ events }) => events)).toMatchObject([
       { id: "actual-1", status: "actual", balanceAfter: 100_000 },
       { id: "forecast:1:expense:家賃:2026-08-20", status: "forecast", balanceAfter: 90_000 },
     ]);
+  });
+
+  it("将来月の手入力予定は当月の残高予測へ反映しない", () => {
+    const forecasts = buildBankCashFlowForecastViews(
+      accounts,
+      [],
+      "2026-08-03",
+      [],
+      [],
+      [],
+      [
+        {
+          id: 10,
+          accountId: 1,
+          date: "2026-10-15",
+          amount: 30_000,
+          direction: "expense",
+          description: "予定納税",
+        },
+      ],
+    );
+
+    expect(forecasts[0]).toMatchObject({
+      forecastEndDate: "2026-08-31",
+      forecastEndBalance: 100_000,
+    });
+    expect(forecasts[0]?.days.flatMap(({ events }) => events)).toEqual([]);
+  });
+
+  it("demo の手入力予定は UI と同じ実日付 cutoff で予測へ反映する", () => {
+    const forecasts = buildBankCashFlowForecastViews(
+      accounts,
+      [],
+      "2026-08-03",
+      [],
+      [],
+      [],
+      [
+        {
+          id: 10,
+          accountId: 1,
+          date: "2026-08-05",
+          amount: 10_000,
+          direction: "expense",
+          description: "経過済み予定",
+        },
+        {
+          id: 11,
+          accountId: 1,
+          date: "2026-08-10",
+          amount: 20_000,
+          direction: "expense",
+          description: "当日予定",
+        },
+      ],
+      "2026-08-10",
+    );
+
+    expect(forecasts[0]?.days.flatMap(({ events }) => events)).toMatchObject([
+      { id: "manual-11", date: "2026-08-10" },
+    ]);
+    expect(forecasts[0]?.days.flatMap(({ events }) => events)).toHaveLength(1);
+    expect(forecasts[0]?.forecastEndBalance).toBe(80_000);
+  });
+
+  it("将来月の手入力予定によって定期予測を将来まで延長しない", () => {
+    const forecasts = buildBankCashFlowForecastViews(
+      accounts,
+      [],
+      "2026-08-03",
+      [candidate({ recurrenceIntervalMonths: 1 })],
+      [],
+      [],
+      [
+        {
+          id: 10,
+          accountId: 1,
+          date: "2026-10-15",
+          amount: 30_000,
+          direction: "expense",
+          description: "予定納税",
+        },
+      ],
+    );
+
+    expect(forecasts[0]?.days.flatMap(({ events }) => events)).toMatchObject([
+      { id: "forecast:1:expense:家賃:2026-08-20", date: "2026-08-20" },
+    ]);
+    expect(forecasts[0]?.forecastEndBalance).toBe(90_000);
+  });
+
+  it("手入力予定は登録月になると当月の残高予測へ反映する", () => {
+    const forecasts = buildBankCashFlowForecastViews(
+      accounts.map((account) => ({ ...account, lastUpdated: "2026-10-03T08:00:00" })),
+      [],
+      "2026-10-03",
+      [],
+      [],
+      [],
+      [
+        {
+          id: 10,
+          accountId: 1,
+          date: "2026-10-15",
+          amount: 30_000,
+          direction: "expense",
+          description: "予定納税",
+        },
+      ],
+    );
+
+    expect(forecasts[0]).toMatchObject({
+      forecastEndDate: "2026-10-31",
+      forecastEndBalance: 70_000,
+    });
+    expect(forecasts[0]?.days.flatMap(({ events }) => events)).toEqual([
+      expect.objectContaining({
+        id: "manual-10",
+        date: "2026-10-15",
+        amountSource: "manual",
+        balanceAfter: 70_000,
+      }),
+    ]);
+  });
+
+  it("当日の一致する実績と手入力予定を1対1で照合する", () => {
+    const forecasts = buildBankCashFlowForecastViews(
+      accounts,
+      [transaction(1, { date: "2026-08-03" })],
+      "2026-08-03",
+      [],
+      [],
+      [],
+      [
+        {
+          id: 10,
+          accountId: 1,
+          date: "2026-08-03",
+          amount: 5_000,
+          direction: "income",
+          description: "入金予定",
+        },
+        {
+          id: 11,
+          accountId: 1,
+          date: "2026-08-03",
+          amount: 5_000,
+          direction: "income",
+          description: "別の入金予定",
+        },
+      ],
+    );
+
+    expect(forecasts[0]?.days.flatMap(({ events }) => events)).toMatchObject([
+      { id: "actual-1", status: "actual" },
+      { id: "manual-11", status: "forecast" },
+    ]);
+    expect(forecasts[0]?.days.flatMap(({ events }) => events)).toHaveLength(2);
+    expect(forecasts[0]?.forecastEndBalance).toBe(105_000);
+  });
+
+  it("定期候補が消費した実績を手入力予定との照合に再利用しない", () => {
+    const forecasts = buildBankCashFlowForecastViews(
+      accounts,
+      [transaction(1, { date: "2026-08-03" })],
+      "2026-08-03",
+      [
+        candidate({
+          type: "income",
+          classification: "salary",
+          description: "給与振込",
+          recurringIdentity: "給与振込",
+          predictedDate: "2026-08-03",
+          predictedAmount: 5_000,
+        }),
+      ],
+      [],
+      [],
+      [
+        {
+          id: 10,
+          accountId: 1,
+          date: "2026-08-03",
+          amount: 5_000,
+          direction: "income",
+          description: "別の入金予定",
+        },
+      ],
+    );
+
+    expect(forecasts[0]?.days.flatMap(({ events }) => events)).toMatchObject([
+      { id: "actual-1", status: "actual" },
+      { id: "manual-10", status: "forecast" },
+    ]);
+    expect(forecasts[0]?.days.flatMap(({ events }) => events)).toHaveLength(2);
+    expect(forecasts[0]?.forecastEndBalance).toBe(105_000);
+  });
+
+  it("定期候補と同じ内容の手入力予定は同じ実績で二重計上を防ぐ", () => {
+    const forecasts = buildBankCashFlowForecastViews(
+      accounts,
+      [transaction(1, { date: "2026-08-03" })],
+      "2026-08-03",
+      [
+        candidate({
+          type: "income",
+          classification: "salary",
+          description: "給与振込",
+          recurringIdentity: "給与振込",
+          predictedDate: "2026-08-03",
+          predictedAmount: 5_000,
+        }),
+      ],
+      [],
+      [],
+      [
+        {
+          id: 10,
+          accountId: 1,
+          date: "2026-08-03",
+          amount: 5_000,
+          direction: "income",
+          description: "給与振込",
+        },
+      ],
+    );
+
+    expect(forecasts[0]?.days.flatMap(({ events }) => events)).toMatchObject([
+      { id: "actual-1", status: "actual" },
+    ]);
+    expect(forecasts[0]?.days.flatMap(({ events }) => events)).toHaveLength(1);
+    expect(forecasts[0]?.forecastEndBalance).toBe(100_000);
+  });
+
+  it("ミラー振替より通常明細を優先し、手入力予定とそれぞれ一度だけ反映する", () => {
+    const mirroredTransfer = transaction(1, {
+      accountId: 2,
+      transferTargetAccountId: 1,
+      amount: 5_000,
+      type: "transfer",
+      isTransfer: true,
+      isExcludedFromCalculation: true,
+    });
+    const normalExpense = transaction(2, {
+      accountId: 1,
+      amount: 5_000,
+      type: "expense",
+      description: "通常明細",
+    });
+    const forecasts = buildBankCashFlowForecastViews(
+      accounts,
+      [mirroredTransfer, normalExpense],
+      "2026-08-03",
+      [],
+      [],
+      [],
+      [
+        {
+          id: 10,
+          accountId: 1,
+          date: "2026-08-15",
+          amount: 30_000,
+          direction: "expense",
+          description: "予定納税",
+        },
+      ],
+    );
+
+    expect(forecasts[0]?.days.flatMap(({ events }) => events)).toMatchObject([
+      { id: "actual-2", description: "通常明細" },
+      { id: "manual-10", amountSource: "manual" },
+    ]);
+    expect(forecasts[0]?.forecastEndBalance).toBe(70_000);
+  });
+
+  it("振替のみの支出と手入力予定をそれぞれ一度だけ反映する", () => {
+    const transfer = transaction(1, {
+      accountId: 2,
+      transferTargetAccountId: 1,
+      amount: 5_000,
+      type: "transfer",
+      isTransfer: true,
+      isExcludedFromCalculation: true,
+    });
+    const forecasts = buildBankCashFlowForecastViews(
+      accounts,
+      [transfer],
+      "2026-08-03",
+      [],
+      [],
+      [],
+      [
+        {
+          id: 10,
+          accountId: 1,
+          date: "2026-08-15",
+          amount: 30_000,
+          direction: "expense",
+          description: "予定納税",
+        },
+      ],
+    );
+
+    expect(forecasts[0]?.days.flatMap(({ events }) => events)).toMatchObject([
+      { id: "actual-1-source", direction: "expense" },
+      { id: "manual-10", amountSource: "manual" },
+    ]);
+    expect(forecasts[0]?.forecastEndBalance).toBe(70_000);
   });
 
   it("当月に記録済みの候補を二重計上せず、未記録の期日超過候補は基準日に繰り越す", () => {
@@ -107,7 +415,7 @@ describe("buildBankCashFlowForecastViews", () => {
       { id: "actual-1", status: "actual" },
       { id: "forecast:1:expense:家賃:2026-08-03", status: "forecast", date: "2026-08-03" },
     ]);
-    expect(forecasts[0]?.monthEndBalance).toBe(90_000);
+    expect(forecasts[0]?.forecastEndBalance).toBe(90_000);
   });
 
   it("変動額の当月実績が同じ定期候補を二重計上しない", () => {
@@ -160,7 +468,7 @@ describe("buildBankCashFlowForecastViews", () => {
     expect(forecasts[0]?.days.flatMap(({ events }) => events)).toMatchObject([
       { id: "actual-1", status: "actual" },
     ]);
-    expect(forecasts[0]?.monthEndBalance).toBe(90_000);
+    expect(forecasts[0]?.forecastEndBalance).toBe(90_000);
   });
 
   it("却下時点までの候補を除外し、新しい同名実績があれば復帰する", () => {
@@ -216,7 +524,7 @@ describe("buildBankCashFlowForecastViews", () => {
     expect(forecasts[0]).toMatchObject({
       currentBalance: 105_000,
       openingBalance: 100_000,
-      monthEndBalance: 105_000,
+      forecastEndBalance: 105_000,
     });
   });
 
@@ -269,7 +577,7 @@ describe("buildBankCashFlowForecastViews", () => {
       { id: "actual-1", status: "actual" },
       { id: "forecast:1:expense:家賃categorysep:2026-08-03", status: "forecast" },
     ]);
-    expect(forecasts[0]?.monthEndBalance).toBe(90_000);
+    expect(forecasts[0]?.forecastEndBalance).toBe(90_000);
   });
 
   it("同じ説明でも金額または予定日が異なる候補は残す", () => {
@@ -401,7 +709,7 @@ describe("buildBankCashFlowForecastViews", () => {
         amount: 30_000,
       },
     ]);
-    expect(forecasts[0]?.monthEndBalance).toBe(70_000);
+    expect(forecasts[0]?.forecastEndBalance).toBe(70_000);
   });
 
   it("前月の明細が未取得でも前々月まで継続した引落しを予測する", () => {
@@ -523,7 +831,7 @@ describe("buildBankCashFlowForecastViews", () => {
     const forecasts = buildBankCashFlowForecastViews(accounts, selfTransfers, "2026-08-03");
 
     expect(forecasts[0]?.days).toEqual([]);
-    expect(forecasts[0]?.monthEndBalance).toBe(100_000);
+    expect(forecasts[0]?.forecastEndBalance).toBe(100_000);
   });
 
   it("カード口座の引き落とし予定額を過去金額より優先する", () => {
@@ -564,7 +872,113 @@ describe("buildBankCashFlowForecastViews", () => {
         amountSource: "scheduled_withdrawal",
       },
     ]);
-    expect(forecasts[0]?.monthEndBalance).toBe(58_000);
+    expect(forecasts[0]?.forecastEndBalance).toBe(58_000);
+  });
+
+  it("確定カード引落しは将来月の手入力予定によって予測期間を延長しない", () => {
+    const cardAccount = {
+      id: 3,
+      name: "カード A",
+      categoryName: "カード",
+      totalAssets: 0,
+      lastUpdated: "2026-08-03T08:00:00",
+      scheduledWithdrawalAmount: 20_000,
+      scheduledWithdrawalConfirmed: true,
+    };
+    const transfers = ["2026-05-20", "2026-06-20", "2026-07-20"].map((date, index) =>
+      transaction(index + 1, {
+        accountId: 3,
+        transferTargetAccountId: 1,
+        date,
+        amount: 20_000,
+        type: "transfer",
+        description: "カード利用代金",
+        isTransfer: true,
+        isExcludedFromCalculation: true,
+      }),
+    );
+
+    const forecasts = buildBankCashFlowForecastViews(
+      [...accounts, cardAccount],
+      transfers,
+      "2026-08-03",
+      undefined,
+      [],
+      [],
+      [
+        {
+          id: 10,
+          accountId: 1,
+          date: "2026-10-15",
+          amount: 10_000,
+          direction: "expense",
+          description: "予定納税",
+        },
+      ],
+    );
+
+    expect(forecasts[0]?.days.flatMap(({ events }) => events)).toMatchObject([
+      { date: "2026-08-20", amountSource: "scheduled_withdrawal" },
+    ]);
+    expect(forecasts[0]?.forecastEndBalance).toBe(80_000);
+  });
+
+  it("確定カード当月分を優先し、将来月の推定周期は当月予測へ含めない", () => {
+    const cardAccount = {
+      id: 3,
+      name: "カード A",
+      categoryName: "カード",
+      totalAssets: 0,
+      lastUpdated: "2026-08-03T08:00:00",
+      scheduledWithdrawalAmount: 42_000,
+      scheduledWithdrawalConfirmed: true,
+    };
+    const transactions = ["2026-05-20", "2026-06-20", "2026-07-20"].flatMap((date, index) => [
+      transaction(index * 2 + 1, {
+        accountId: 3,
+        transferTargetAccountId: 1,
+        date,
+        amount: 30_000,
+        type: "transfer",
+        description: "カード利用代金",
+        category: null,
+        subCategory: null,
+        isTransfer: true,
+        isExcludedFromCalculation: true,
+      }),
+      transaction(index * 2 + 2, {
+        accountId: 1,
+        date,
+        amount: 30_000,
+        type: "expense",
+        description: "カード利用代金",
+        category: "カード",
+        subCategory: null,
+      }),
+    ]);
+    const forecasts = buildBankCashFlowForecastViews(
+      [...accounts, cardAccount],
+      transactions,
+      "2026-08-03",
+      undefined,
+      [],
+      [],
+      [
+        {
+          id: 10,
+          accountId: 1,
+          date: "2026-10-15",
+          amount: 10_000,
+          direction: "expense",
+          description: "予定納税",
+        },
+      ],
+    );
+
+    expect(forecasts[0]?.days.flatMap(({ events }) => events)).toMatchObject([
+      { date: "2026-08-20", amount: 42_000, amountSource: "scheduled_withdrawal" },
+    ]);
+    expect(forecasts[0]?.forecastEndBalance).toBe(58_000);
   });
 
   it("カード通常明細とミラー振替の履歴があっても確定予測を一度だけ追加する", () => {
@@ -921,7 +1335,7 @@ describe("buildBankCashFlowForecastViews", () => {
     );
 
     expect(forecasts[0]?.days).toEqual([]);
-    expect(forecasts[0]?.monthEndBalance).toBe(100_000);
+    expect(forecasts[0]?.forecastEndBalance).toBe(100_000);
   });
 
   it("確定カード引落しが当月実績済みなら予測を追加しない", () => {
@@ -956,7 +1370,7 @@ describe("buildBankCashFlowForecastViews", () => {
 
     expect(events).toHaveLength(1);
     expect(events[0]).toMatchObject({ status: "actual", amount: 42_000 });
-    expect(forecasts[0]?.monthEndBalance).toBe(100_000);
+    expect(forecasts[0]?.forecastEndBalance).toBe(100_000);
   });
 
   it("基準日より後の当月カード振替は確定予測を抑止しない", () => {
@@ -1033,7 +1447,7 @@ describe("buildBankCashFlowForecastViews", () => {
         amountSource: "liability",
       },
     ]);
-    expect(forecasts[0]?.monthEndBalance).toBe(16_000);
+    expect(forecasts[0]?.forecastEndBalance).toBe(16_000);
   });
 
   it("0円で確定したカードは利用残高や過去実績から予測しない", () => {
@@ -1067,7 +1481,7 @@ describe("buildBankCashFlowForecastViews", () => {
     );
 
     expect(forecasts[0]?.days).toEqual([]);
-    expect(forecasts[0]?.monthEndBalance).toBe(100_000);
+    expect(forecasts[0]?.forecastEndBalance).toBe(100_000);
   });
 
   it("銀行口座がなければ予測を返さない", () => {
