@@ -56,7 +56,7 @@ export async function getRefreshStatus(
 
   for (let i = 0; i < count; i++) {
     const row = rows.nth(i);
-    const statuses = await row.locator("td.account-status").allTextContents();
+    const statuses = await row.locator("td.account-status").allInnerTexts();
     const nameLink = row.locator("td.service a").first();
     refreshRows.push({
       name: statuses.some((status) => status.trim() === "更新中")
@@ -74,6 +74,120 @@ export interface RefreshStatusRow {
   statuses: string[];
 }
 
+const TERMINAL_REFRESH_STATUSES = new Set(["取得を停止しています", "一時停止中"]);
+const RETRYABLE_REFRESH_STATUSES = new Set(["正常", "一時停止中"]);
+
+function isRefreshPending(statuses: readonly string[]): boolean {
+  return (
+    statuses.some((status) => status.trim() === "更新中") &&
+    !statuses.some((status) => TERMINAL_REFRESH_STATUSES.has(status.trim()))
+  );
+}
+
+export interface RefreshAccountSnapshot {
+  lastUpdated: string;
+  name: string | null;
+  statuses: string[];
+}
+
+function parseLastUpdatedDate(value: string, referenceTime: Date): Date | null {
+  const shortDateMatch = value.match(/\((\d{1,2})\/(\d{1,2})(?:\s+(\d{1,2}):(\d{2}))?/);
+  const fullDateMatch = value.match(
+    /(?:^|\s)(\d{4})[-/](\d{1,2})[-/](\d{1,2})(?:\s+(\d{1,2}):(\d{2}))?/,
+  );
+  const standaloneShortDateMatch = value.match(/^(\d{1,2})\/(\d{1,2})/);
+  if (!shortDateMatch && !fullDateMatch && !standaloneShortDateMatch) return null;
+
+  const year =
+    fullDateMatch && !shortDateMatch ? Number(fullDateMatch[1]) : referenceTime.getFullYear();
+  const month = Number(shortDateMatch?.[1] ?? fullDateMatch?.[2] ?? standaloneShortDateMatch?.[1]);
+  const day = Number(shortDateMatch?.[2] ?? fullDateMatch?.[3] ?? standaloneShortDateMatch?.[2]);
+  const hour = Number(shortDateMatch?.[3] ?? fullDateMatch?.[4] ?? 0);
+  const minute = Number(shortDateMatch?.[4] ?? fullDateMatch?.[5] ?? 0);
+  const date = new Date(Date.UTC(year, month - 1, day, hour, minute));
+
+  if (
+    shortDateMatch &&
+    Date.UTC(year, month - 1, day) >
+      Date.UTC(referenceTime.getFullYear(), referenceTime.getMonth(), referenceTime.getDate())
+  ) {
+    date.setUTCFullYear(date.getUTCFullYear() - 1);
+  }
+
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
+export function shouldRefreshStaleAccount(
+  account: RefreshAccountSnapshot,
+  now = new Date(),
+): boolean {
+  if (
+    account.statuses.some((status) => status.trim() === "更新中") ||
+    !account.statuses.some((status) => RETRYABLE_REFRESH_STATUSES.has(status.trim()))
+  ) {
+    return false;
+  }
+
+  const lastUpdated = parseLastUpdatedDate(account.lastUpdated, now);
+  if (!lastUpdated) return false;
+
+  const referenceTime = Date.UTC(
+    now.getFullYear(),
+    now.getMonth(),
+    now.getDate(),
+    now.getHours(),
+    now.getMinutes(),
+  );
+  return lastUpdated.getTime() < referenceTime;
+}
+
+async function refreshStaleAccounts(page: Page, now = new Date()): Promise<string[]> {
+  const rows = page.locator("#account-table tr:has(td.account-status)");
+  const staleAccounts: string[] = [];
+  const count = await rows.count();
+
+  for (let i = 0; i < count; i++) {
+    const row = rows.nth(i);
+    const statuses = await row.locator("td.account-status").allInnerTexts();
+    const lastUpdated = await row
+      .locator("td")
+      .nth(2)
+      .textContent()
+      .catch(() => "");
+    const name = await row
+      .locator("td.service a")
+      .first()
+      .textContent()
+      .catch(() =>
+        row
+          .locator("td")
+          .first()
+          .textContent()
+          .catch(() => null),
+      );
+
+    if (!shouldRefreshStaleAccount({ lastUpdated: lastUpdated ?? "", name, statuses }, now)) {
+      continue;
+    }
+
+    const refreshButton = row
+      .locator('form input[type="submit"][name="commit"][value="更新"]')
+      .first();
+    if (
+      !(await refreshButton.isVisible().catch(() => false)) ||
+      !(await refreshButton.isEnabled().catch(() => false))
+    ) {
+      continue;
+    }
+
+    await refreshButton.click();
+    const accountName = name?.trim();
+    if (accountName) staleAccounts.push(accountName);
+  }
+
+  return staleAccounts;
+}
+
 export function summarizeRefreshRows(rows: readonly RefreshStatusRow[]): {
   incompleteAccounts: string[];
   remainingCount: number;
@@ -82,7 +196,7 @@ export function summarizeRefreshRows(rows: readonly RefreshStatusRow[]): {
   let remainingCount = 0;
 
   for (const row of rows) {
-    if (!row.statuses.some((status) => status.trim() === "更新中")) {
+    if (!isRefreshPending(row.statuses)) {
       continue;
     }
 
@@ -124,12 +238,14 @@ export async function clickRefreshButton(
   const maxWaitMinutes = options.maxWaitMinutes ?? getMaxWaitMinutes();
   const maxWaitTimeMs = maxWaitMinutes * 60 * 1000;
   const pollIntervalMs = options.pollIntervalMs ?? POLL_INTERVAL_MS;
+  let hasRetriedStaleAccounts = false;
   debug("Looking for refresh button...");
 
   // Navigate to home and click refresh button
   await page.goto(mfUrls.home);
   await page.waitForLoadState("networkidle");
 
+  const refreshStartedAt = new Date();
   const refreshButton = page.locator('a:has-text("一括更新")').first();
   await refreshButton.click();
 
@@ -159,6 +275,17 @@ export async function clickRefreshButton(
     });
 
     if (remainingCount === 0) {
+      const staleAccounts = hasRetriedStaleAccounts
+        ? []
+        : await refreshStaleAccounts(page, refreshStartedAt);
+      if (staleAccounts.length > 0) {
+        hasRetriedStaleAccounts = true;
+        info(`Refreshing ${staleAccounts.length} stale accounts individually...`);
+        await page.waitForTimeout(3000);
+        await navigateToAccountsPage(page);
+        continue;
+      }
+
       info("All updates completed!");
       return { completed: true, incompleteAccounts: [] };
     }

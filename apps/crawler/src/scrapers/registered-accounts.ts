@@ -48,7 +48,7 @@ export async function getRegisteredAccounts(page: Page): Promise<RegisteredAccou
           cellCount >= 4
             ? await cells
                 .nth(3)
-                .textContent({ timeout: 1000 })
+                .innerText({ timeout: 1000 })
                 .catch(() => "")
             : "";
 

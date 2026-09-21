@@ -4,9 +4,81 @@ import {
   getMaxWaitMinutes,
   getRefreshStatus,
   navigateToAccountsPage,
+  shouldRefreshStaleAccount,
   summarizeRefreshRows,
+  type RefreshAccountSnapshot,
   type RefreshStatusRow,
 } from "./refresh.js";
+
+describe("shouldRefreshStaleAccount", () => {
+  const now = new Date(2026, 8, 21, 12, 0, 30);
+
+  test.each<{
+    account: RefreshAccountSnapshot;
+    expected: boolean;
+    name: string;
+  }>([
+    {
+      name: "正常で最終取得日が前日なら更新する",
+      account: { name: "Institution A", statuses: ["正常"], lastUpdated: "09/20 06:32" },
+      expected: true,
+    },
+    {
+      name: "正常で一括更新時刻より前なら当日でも更新する",
+      account: { name: "Institution A", statuses: ["正常"], lastUpdated: "09/21 06:32" },
+      expected: true,
+    },
+    {
+      name: "括弧内の最終取得日が一括更新と同じ分なら更新しない",
+      account: {
+        name: "Institution A",
+        statuses: ["正常"],
+        lastUpdated: "2025/04/06 (09/21 12:00)",
+      },
+      expected: false,
+    },
+    {
+      name: "括弧内の最終取得日が一括更新より後なら更新しない",
+      account: {
+        name: "Institution A",
+        statuses: ["正常"],
+        lastUpdated: "2025/04/06 (09/21 12:01)",
+      },
+      expected: false,
+    },
+    {
+      name: "更新中は更新しない",
+      account: { name: "Institution A", statuses: ["更新中", "正常"], lastUpdated: "09/20" },
+      expected: false,
+    },
+    {
+      name: "取得停止中は最終取得日が古くても更新しない",
+      account: {
+        name: "Institution A",
+        statuses: ["取得を停止しています"],
+        lastUpdated: "09/20",
+      },
+      expected: false,
+    },
+    {
+      name: "一時停止中で最終取得日が古ければ更新する",
+      account: { name: "Institution A", statuses: ["一時停止中"], lastUpdated: "09/20" },
+      expected: true,
+    },
+    {
+      name: "状態が正常でなければ更新しない",
+      account: { name: "Institution A", statuses: ["停止中"], lastUpdated: "09/20" },
+      expected: false,
+    },
+    {
+      name: "解釈できない日付は更新しない",
+      account: { name: "Institution A", statuses: ["正常"], lastUpdated: "未取得" },
+      expected: false,
+    },
+  ])("$name", ({ account, expected }) => {
+    expect(shouldRefreshStaleAccount(account, now)).toBe(expected);
+  });
+});
 
 describe("getMaxWaitMinutes", () => {
   test.each([undefined, "", "0", "-1", "Infinity", "NaN"])(
@@ -53,6 +125,14 @@ describe("summarizeRefreshRows", () => {
       expected: { incompleteAccounts: [], remainingCount: 0 },
     },
     {
+      name: "停止状態へ遷移した行は待機対象から除外する",
+      rows: [
+        { name: "Institution A", statuses: ["更新中", "取得を停止しています"] },
+        { name: "Institution B", statuses: ["更新中", "一時停止中"] },
+      ],
+      expected: { incompleteAccounts: [], remainingCount: 0 },
+    },
+    {
       name: "空の行一覧は0件を返す",
       rows: [],
       expected: { incompleteAccounts: [], remainingCount: 0 },
@@ -75,7 +155,7 @@ describe("summarizeRefreshRows", () => {
 describe("getRefreshStatus", () => {
   test("service linkがない更新中行は先頭セルの名称を使う", async () => {
     const statusCells = {
-      allTextContents: vi.fn<() => Promise<string[]>>().mockResolvedValue(["更新中"]),
+      allInnerTexts: vi.fn<() => Promise<string[]>>().mockResolvedValue(["更新中"]),
     };
     const nameLink = {
       count: vi.fn<() => Promise<number>>().mockResolvedValue(0),
