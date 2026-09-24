@@ -66,6 +66,15 @@ describe("shouldRefreshStaleAccount", () => {
       expected: true,
     },
     {
+      name: "一時停止中に補足文があっても更新する",
+      account: {
+        name: "Institution A",
+        statuses: ["一時停止中（再認証が必要）"],
+        lastUpdated: "09/20",
+      },
+      expected: true,
+    },
+    {
       name: "状態が正常でなければ更新しない",
       account: { name: "Institution A", statuses: ["停止中"], lastUpdated: "09/20" },
       expected: false,
@@ -128,7 +137,7 @@ describe("summarizeRefreshRows", () => {
       name: "停止状態へ遷移した行は待機対象から除外する",
       rows: [
         { name: "Institution A", statuses: ["更新中", "取得を停止しています"] },
-        { name: "Institution B", statuses: ["更新中", "一時停止中"] },
+        { name: "Institution B", statuses: ["更新中", "一時停止中（再認証が必要）"] },
       ],
       expected: { incompleteAccounts: [], remainingCount: 0 },
     },

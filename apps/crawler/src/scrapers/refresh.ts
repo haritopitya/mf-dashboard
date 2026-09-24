@@ -74,13 +74,15 @@ export interface RefreshStatusRow {
   statuses: string[];
 }
 
-const TERMINAL_REFRESH_STATUSES = new Set(["取得を停止しています", "一時停止中"]);
-const RETRYABLE_REFRESH_STATUSES = new Set(["正常", "一時停止中"]);
+function hasRefreshStatus(statuses: readonly string[], expected: string): boolean {
+  return statuses.some((status) => status.trim().startsWith(expected));
+}
 
 function isRefreshPending(statuses: readonly string[]): boolean {
   return (
     statuses.some((status) => status.trim() === "更新中") &&
-    !statuses.some((status) => TERMINAL_REFRESH_STATUSES.has(status.trim()))
+    !statuses.some((status) => status.trim().startsWith("取得を停止しています")) &&
+    !statuses.some((status) => status.trim().startsWith("一時停止中"))
   );
 }
 
@@ -122,8 +124,11 @@ export function shouldRefreshStaleAccount(
   now = new Date(),
 ): boolean {
   if (
-    account.statuses.some((status) => status.trim() === "更新中") ||
-    !account.statuses.some((status) => RETRYABLE_REFRESH_STATUSES.has(status.trim()))
+    hasRefreshStatus(account.statuses, "更新中") ||
+    account.statuses.some((status) => status.trim().startsWith("取得を停止しています")) ||
+    !account.statuses.some(
+      (status) => hasRefreshStatus([status], "正常") || hasRefreshStatus([status], "一時停止中"),
+    )
   ) {
     return false;
   }
