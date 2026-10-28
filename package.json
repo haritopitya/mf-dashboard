@@ -24,13 +24,13 @@
     "knip": "knip"
   },
   "devDependencies": {
-    "knip": "6.37.0",
-    "lefthook": "2.1.14",
-    "oxfmt": "0.68.0",
-    "oxlint": "1.83.0",
-    "oxlint-tsgolint": "7.0.2002",
-    "tsx": "4.23.13",
-    "turbo": "2.11.2"
+    "knip": "6.40.0",
+    "lefthook": "2.1.17",
+    "oxfmt": "0.72.0",
+    "oxlint": "1.87.0",
+    "oxlint-tsgolint": "7.0.2004",
+    "tsx": "4.23.15",
+    "turbo": "2.11.9"
   },
-  "packageManager": "pnpm@12.4.2"
+  "packageManager": "pnpm@12.16.1"
 }
