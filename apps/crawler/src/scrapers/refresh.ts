@@ -1,6 +1,6 @@
 import type { RefreshResult } from "@mf-dashboard/db/types";
 import { mfUrls } from "@mf-dashboard/meta/urls";
-import type { Page } from "playwright";
+import type { Locator, Page } from "playwright";
 import { debug, info, warn } from "../logger.js";
 
 const DEFAULT_MAX_WAIT_MINUTES = 20;
@@ -56,7 +56,7 @@ export async function getRefreshStatus(
 
   for (let i = 0; i < count; i++) {
     const row = rows.nth(i);
-    const statuses = await row.locator("td.account-status").allInnerTexts();
+    const statuses = await getVisibleAccountStatusTexts(row);
     const nameLink = row.locator("td.service a").first();
     refreshRows.push({
       name: statuses.some((status) => status.trim() === "更新中")
@@ -72,6 +72,27 @@ export async function getRefreshStatus(
 export interface RefreshStatusRow {
   name: string | null;
   statuses: string[];
+}
+
+export async function getVisibleAccountStatusTexts(row: Locator): Promise<string[]> {
+  let visibleInfoTexts: string[] = [];
+  try {
+    visibleInfoTexts = await row.locator('td[id^="js-info-msg-td-"]:visible').allInnerTexts();
+  } catch {
+    // Fall back for simple locators and pages without an info message cell.
+  }
+  if (visibleInfoTexts.length > 0) return visibleInfoTexts;
+
+  const statusCell = row.locator("td.account-status");
+  let visibleStatusTexts: string[] = [];
+  try {
+    visibleStatusTexts = await statusCell.locator("span:visible").allInnerTexts();
+  } catch {
+    // Fall back to the status cell text below.
+  }
+  if (visibleStatusTexts.length > 0) return visibleStatusTexts;
+
+  return statusCell.allInnerTexts();
 }
 
 function hasRefreshStatus(statuses: readonly string[], expected: string): boolean {
@@ -153,7 +174,7 @@ async function refreshStaleAccounts(page: Page, now = new Date()): Promise<strin
 
   for (let i = 0; i < count; i++) {
     const row = rows.nth(i);
-    const statuses = await row.locator("td.account-status").allInnerTexts();
+    const statuses = await getVisibleAccountStatusTexts(row);
     const lastUpdated = await row
       .locator("td")
       .nth(2)
@@ -248,10 +269,13 @@ export async function clickRefreshButton(
 
   // Navigate to home and click refresh button
   await page.goto(mfUrls.home);
-  await page.waitForLoadState("networkidle");
+  // MF home never reaches "networkidle" (constant background polling), so wait for
+  // the load event and the refresh button itself instead.
+  await page.waitForLoadState("load");
 
   const refreshStartedAt = new Date();
   const refreshButton = page.locator('a:has-text("一括更新")').first();
+  await refreshButton.waitFor({ state: "visible", timeout: 60_000 });
   await refreshButton.click();
 
   info("Refreshing accounts...");

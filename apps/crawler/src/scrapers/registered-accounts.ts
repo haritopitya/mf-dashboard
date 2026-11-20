@@ -3,6 +3,7 @@ import { mfUrls } from "@mf-dashboard/meta/urls";
 import type { Page } from "playwright";
 import { debug } from "../logger.js";
 import { parseJapaneseNumber } from "../parsers.js";
+import { getVisibleAccountStatusTexts } from "./refresh.js";
 
 export async function getRegisteredAccounts(page: Page): Promise<RegisteredAccounts> {
   debug("Getting registered accounts from /accounts page...");
@@ -45,12 +46,7 @@ export async function getRegisteredAccounts(page: Page): Promise<RegisteredAccou
           .textContent({ timeout: 1000 })
           .catch(() => "");
         const statusText =
-          cellCount >= 4
-            ? await cells
-                .nth(3)
-                .innerText({ timeout: 1000 })
-                .catch(() => "")
-            : "";
+          cellCount >= 4 ? (await getVisibleAccountStatusTexts(row)).join(" ") : "";
 
         // Try account name link first (e.g., /accounts/show/xxx)
         // Fall back to edit link or form action (e.g., /accounts/edit/xxx for 携帯 accounts)
